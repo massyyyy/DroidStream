@@ -15,6 +15,8 @@ class HostService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var http: GameStreamHttpServer? = null
+    private var mdns: MdnsAdvertiser? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -22,14 +24,17 @@ class HostService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
-                NotificationChannel("host", getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW)
-            )
+                NotificationChannel("host", getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW))
         }
+
+        val ip = lanIp()
+        val name = HostIdentity.hostname(this)
+
         val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "host")
                       else @Suppress("DEPRECATION") Notification.Builder(this)
         val notification = builder
-            .setContentTitle(getString(R.string.notif_title))
-            .setContentText(getString(R.string.notif_text))
+            .setContentTitle(name)
+            .setContentText("Host attivo - " + ip + ":" + HostIdentity.HTTP_PORT)
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setOngoing(true)
             .build()
@@ -50,16 +55,44 @@ class HostService : Service() {
         wifiLock = wm.createWifiLock(mode, "DroidStream::wifi")
         wifiLock?.acquire()
 
-        Logger.i(this, "servizio attivo (wifiLock mode=$mode, wakeLock attivo)")
+        Logger.i(this, "=== M1 AVVIO HOST ===")
+        Logger.i(this, "hostname=" + name + " uniqueid=" + HostIdentity.uniqueId(this))
+        Logger.i(this, "IP LAN: " + ip + "  (su Moonlight: aggiungi PC manualmente con questo IP)")
+
+        try {
+            http = GameStreamHttpServer(this).also { it.start(HostIdentity.HTTP_PORT) }
+            Logger.i(this, "HTTP in ascolto su 0.0.0.0:" + HostIdentity.HTTP_PORT)
+        } catch (e: Exception) {
+            Logger.i(this, "HTTP AVVIO FALLITO: " + e.javaClass.simpleName + ": " + e.message)
+        }
+
+        mdns = MdnsAdvertiser(this).also { it.start(name, HostIdentity.HTTP_PORT) }
+
+        Thread {
+            try {
+                Thread.sleep(500)
+                Logger.i(this, "SELF-TEST /serverinfo:\n" + (http?.selfTest() ?: "server non attivo"))
+            } catch (e: Exception) {}
+        }.apply { isDaemon = true }.start()
+
         return START_STICKY
     }
 
+    private fun lanIp(): String {
+        return try {
+            val wm = applicationContext.getSystemService(WifiManager::class.java)
+            @Suppress("DEPRECATION") val a = wm.connectionInfo.ipAddress
+            if (a == 0) "0.0.0.0"
+            else "%d.%d.%d.%d".format(a and 0xff, (a shr 8) and 0xff, (a shr 16) and 0xff, (a shr 24) and 0xff)
+        } catch (e: Exception) { "sconosciuto" }
+    }
+
     override fun onDestroy() {
-        wifiLock?.let { if (it.isHeld) it.release() }
-        wifiLock = null
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
-        Logger.i(this, "servizio fermato")
+        mdns?.stop(); mdns = null
+        http?.stop(); http = null
+        wifiLock?.let { if (it.isHeld) it.release() }; wifiLock = null
+        wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null
+        Logger.i(this, "=== HOST FERMATO ===")
         super.onDestroy()
     }
 }
