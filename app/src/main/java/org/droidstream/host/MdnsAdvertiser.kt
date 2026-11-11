@@ -6,31 +6,39 @@ import android.net.nsd.NsdServiceInfo
 
 class MdnsAdvertiser(private val ctx: Context) {
 
-    // Verificato: Sunshine platform/common.h:1324 -> "_nvstream._tcp"
-    private val serviceType = "_nvstream._tcp."
     private var nm: NsdManager? = null
     private var listener: NsdManager.RegistrationListener? = null
 
     fun start(name: String, port: Int) {
         if (listener != null) return
-        val manager = ctx.applicationContext.getSystemService(NsdManager::class.java) ?: return
-        val info = NsdServiceInfo().apply {
-            serviceName = name
-            setServiceType(serviceType)
-            setPort(port)
+        val manager = ctx.applicationContext.getSystemService(NsdManager::class.java)
+        if (manager == null) {
+            Logger.i(ctx, "mDNS: NsdManager non disponibile")
+            return
         }
+
+        // Verificato: Sunshine platform/common.h:1324 -> "_nvstream._tcp"
+        // NIENTE apply{}: il receiver nascondeva il campo serviceType (bug M1)
+        val type = "_nvstream._tcp."
+        val info = NsdServiceInfo()
+        info.serviceName = name
+        info.setServiceType(type)
+        info.setPort(port)
+
+        Logger.i(ctx, "mDNS: registro name=" + info.serviceName + " type=" + info.serviceType + " port=" + port)
+
         val l = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(info: NsdServiceInfo) {
-                Logger.i(ctx, "mDNS REGISTRATO: " + info.serviceName + " " + serviceType + " porta " + port)
+            override fun onServiceRegistered(si: NsdServiceInfo) {
+                Logger.i(ctx, "mDNS REGISTRATO: " + si.serviceName)
             }
-            override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+            override fun onRegistrationFailed(si: NsdServiceInfo, errorCode: Int) {
                 Logger.i(ctx, "mDNS FALLITO errorCode=" + errorCode)
                 listener = null
             }
-            override fun onServiceUnregistered(info: NsdServiceInfo) {
+            override fun onServiceUnregistered(si: NsdServiceInfo) {
                 Logger.i(ctx, "mDNS rimosso")
             }
-            override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+            override fun onUnregistrationFailed(si: NsdServiceInfo, errorCode: Int) {
                 Logger.i(ctx, "mDNS unregistration errorCode=" + errorCode)
             }
         }
