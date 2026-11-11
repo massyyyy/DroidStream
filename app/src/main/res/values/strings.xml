@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DroidStream Host</string>
+    <string name="btn_diag">Diagnosi</string>
+    <string name="btn_start">Avvia servizio</string>
+    <string name="btn_stop">Ferma</string>
+    <string name="btn_copy">Copia log</string>
+    <string name="working">Raccolta informazioni in corso…</string>
+    <string name="copied">Log copiato negli appunti</string>
+    <string name="channel_name">Stato host</string>
+    <string name="notif_title">DroidStream host</string>
+    <string name="notif_text">Servizio attivo (M0: nessun streaming)</string>
+</resources>

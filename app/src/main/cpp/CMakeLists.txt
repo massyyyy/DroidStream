@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(droidstream_native CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_library(droidstream_native SHARED native_bridge.cpp)
+find_library(log-lib log)
+target_link_libraries(droidstream_native ${log-lib})
