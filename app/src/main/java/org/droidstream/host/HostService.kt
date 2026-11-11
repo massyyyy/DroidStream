@@ -21,6 +21,11 @@ class HostService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (http != null) {
+            Logger.i(this, "host gia' attivo: richiesta duplicata ignorata")
+            return START_STICKY
+        }
+
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
@@ -45,28 +50,34 @@ class HostService : Service() {
             startForeground(1, notification)
         }
 
-        val pm = getSystemService(PowerManager::class.java)
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DroidStream::host")
-        wakeLock?.acquire()
+        if (wakeLock == null) {
+            val pm = getSystemService(PowerManager::class.java)
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DroidStream::host")
+            wakeLock?.acquire()
+        }
+        if (wifiLock == null) {
+            val wm = applicationContext.getSystemService(WifiManager::class.java)
+            val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                       else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            wifiLock = wm.createWifiLock(mode, "DroidStream::wifi")
+            wifiLock?.acquire()
+        }
 
-        val wm = applicationContext.getSystemService(WifiManager::class.java)
-        val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-                   else WifiManager.WIFI_MODE_FULL_HIGH_PERF
-        wifiLock = wm.createWifiLock(mode, "DroidStream::wifi")
-        wifiLock?.acquire()
-
-        Logger.i(this, "=== M1 AVVIO HOST ===")
+        Logger.i(this, "=== M1.1 AVVIO HOST ===")
         Logger.i(this, "hostname=" + name + " uniqueid=" + HostIdentity.uniqueId(this))
-        Logger.i(this, "IP LAN: " + ip + "  (su Moonlight: aggiungi PC manualmente con questo IP)")
+        Logger.i(this, "IP LAN: " + ip)
 
         try {
             http = GameStreamHttpServer(this).also { it.start(HostIdentity.HTTP_PORT) }
             Logger.i(this, "HTTP in ascolto su 0.0.0.0:" + HostIdentity.HTTP_PORT)
         } catch (e: Exception) {
+            http = null
             Logger.i(this, "HTTP AVVIO FALLITO: " + e.javaClass.simpleName + ": " + e.message)
         }
 
-        mdns = MdnsAdvertiser(this).also { it.start(name, HostIdentity.HTTP_PORT) }
+        if (mdns == null) {
+            mdns = MdnsAdvertiser(this).also { it.start(name, HostIdentity.HTTP_PORT) }
+        }
 
         Thread {
             try {
