@@ -12,7 +12,7 @@ object Diagnostics {
 
     fun collect(ctx: Context): String {
         val sb = StringBuilder()
-        sb.append("=== DroidStream M0 - diagnostica host ===\n")
+        sb.append("=== DroidStream M0.5 - diagnostica host ===\n")
 
         val ver = try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName } catch (e: Exception) { "?" }
         sb.append("App: ").append(ver).append("\n")
@@ -42,20 +42,14 @@ object Diagnostics {
               .append(" RSSI ").append(info.rssi).append(" dBm link ").append(info.linkSpeed).append(" Mbps\n")
         } catch (e: Exception) { sb.append("wifi: errore ").append(e.message).append("\n") }
 
-        sb.append("\n--- ROOT (indizio, non prova) ---\n")
-        val suPaths = listOf("/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su",
-                             "/system/bin/magisk", "/data/adb/magisk")
-        val found = suPaths.filter { File(it).exists() }
-        sb.append("su trovati: ").append(if (found.isEmpty()) "nessuno" else found.joinToString(", ")).append("\n")
-        sb.append("Build.TAGS: ").append(Build.TAGS).append("\n")
+        sb.append("\n--- ROOT ---\n")
+        sb.append(rootProbe())
 
         sb.append("\n--- ENCODER H.264 ---\n")
         try {
-            val list = MediaCodecList(MediaCodecList.ALL_CODECS)
             var n = 0
-            for (ci in list.codecInfos) {
-                if (!ci.isEncoder) continue
-                if (!ci.supportedTypes.contains("video/avc")) continue
+            for (ci in MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos) {
+                if (!ci.isEncoder || !ci.supportedTypes.contains("video/avc")) continue
                 n++
                 sb.append("* ").append(ci.name)
                 if (Build.VERSION.SDK_INT >= 29) {
@@ -68,15 +62,13 @@ object Diagnostics {
                     if (vc != null) {
                         sb.append("   max ").append(vc.supportedWidths.upper).append("x")
                           .append(vc.supportedHeights.upper)
-                          .append(" fps ").append(vc.supportedFrameRates.upper)
                           .append(" bitrate ").append(vc.bitrateRange.lower).append("..")
                           .append(vc.bitrateRange.upper).append("\n")
                     }
-                    sb.append("   profili: ").append(caps.profileLevels.size)
-                    val feats = mutableListOf<String>()
-                    if (caps.isFeatureSupported("low-latency")) feats.add("low-latency")
-                    if (caps.isFeatureSupported("intra-refresh")) feats.add("intra-refresh")
-                    sb.append("   feature: ").append(if (feats.isEmpty()) "nessuna dichiarata" else feats.joinToString(", ")).append("\n")
+                    sb.append("   profile/level: ")
+                    for (pl in caps.profileLevels) sb.append(pl.profile).append("/").append(pl.level).append(" ")
+                    sb.append("\n")
+                    sb.append("   colorFormats: ").append(caps.colorFormats.joinToString(",")).append("\n")
                 } catch (e: Exception) { sb.append("   caps: errore ").append(e.message).append("\n") }
             }
             if (n == 0) sb.append("NESSUN encoder H.264 trovato\n")
@@ -85,7 +77,29 @@ object Diagnostics {
         sb.append("\n--- NATIVE (NDK) ---\n")
         sb.append(try { NativeBridge.info() } catch (e: Throwable) { "ERRORE native: " + e.message }).append("\n")
 
+        sb.append(EncoderBench.run())
+
         sb.append("\n=== fine ===\n")
-        return sb.toString()
+        val report = sb.toString()
+        Logger.i(ctx, report)
+        return report
+    }
+
+    private fun rootProbe(): String {
+        val paths = listOf("/sbin/su", "/system/bin/su", "/system/xbin/su", "/su/bin/su")
+        val found = paths.filter { File(it).exists() }
+        if (found.isEmpty()) return "su non trovato: nessun root\n"
+        return try {
+            val p = Runtime.getRuntime().exec(arrayOf(found[0], "-c", "id"))
+            val out = StringBuilder()
+            val t = Thread {
+                try { p.inputStream.bufferedReader().forEachLine { out.append(it).append(" ") } } catch (e: Exception) {}
+            }
+            t.isDaemon = true
+            t.start()
+            t.join(5000)
+            if (out.contains("uid=0")) "ROOT CONFERMATO: " + out.toString().trim() + "\n"
+            else "su presente (" + found.joinToString(",") + ") ma risposta: '" + out.toString().trim() + "'\n"
+        } catch (e: Exception) { "esecuzione su fallita: " + e.message + "\n" }
     }
 }
