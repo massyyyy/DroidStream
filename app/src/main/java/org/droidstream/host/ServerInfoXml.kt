@@ -1,5 +1,7 @@
 package org.droidstream.host
 
+import android.content.Context
+
 object ServerInfoXml {
 
     const val NOT_FOUND = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"404\"/>"
