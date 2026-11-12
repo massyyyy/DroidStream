@@ -8,7 +8,6 @@ object ServerInfoXml {
 
     const val NOT_FOUND = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"404\"/>"
 
-    // Restituisce SEMPRE l'IPv4 della LAN, ignorando IPv6/loopback
     fun lanIpv4(): String {
         try {
             val ifaces = NetworkInterface.getNetworkInterfaces()
@@ -44,7 +43,7 @@ object ServerInfoXml {
         sb.append("<ServerCodecModeSupport>1</ServerCodecModeSupport>")
         sb.append("<PairStatus>").append(pairStatus).append("</PairStatus>")
         sb.append("<currentgame>0</currentgame>")
-        sb.append("<state>SUNSHINE_SERVER_FREE</state>")
+        sb.append("<state>MJOLNIR_SERVER_FREE</state>")
         sb.append("</root>")
         return sb.toString()
     }
