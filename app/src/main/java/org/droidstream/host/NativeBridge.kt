@@ -5,5 +5,12 @@ object NativeBridge {
     external fun info(): String
     external fun enetStart(port: Int): Boolean
     external fun enetStop()
-    external fun sendVideoFrame(data: ByteArray, frameIndex: Int, isKeyframe: Boolean, remoteAddr: String, remotePort: Int): Int
+    external fun sendVideoFrame(
+        data: ByteArray, 
+        frameIndex: Int, 
+        isKeyframe: Boolean, 
+        rtpTimestamp: Int, 
+        remoteAddr: String, 
+        remotePort: Int
+    ): Int
 }
