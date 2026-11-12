@@ -25,6 +25,11 @@
             android:launchMode="singleInstance"
             android:taskAffinity=":pin"
             android:theme="@android:style/Theme.Dialog"/>
+        <activity
+            android:name=".ProjectionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
         <service
             android:name=".HostService"
             android:exported="false"
