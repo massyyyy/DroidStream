@@ -40,7 +40,7 @@ class HostService : Service() {
                       else @Suppress("DEPRECATION") Notification.Builder(this)
         val notification = builder
             .setContentTitle(name)
-            .setContentText("Host attivo - " + ip)
+            .setContentText("Host attivo - $ip")
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setOngoing(true)
             .build()
@@ -64,25 +64,25 @@ class HostService : Service() {
             wifiLock?.acquire()
         }
 
-        Logger.i(this, "=== M2a AVVIO HOST ===")
-        Logger.i(this, "hostname=" + name + " uniqueid=" + HostIdentity.uniqueId(this))
-        Logger.i(this, "IP LAN: " + ip)
+        Logger.i(this, "=== M3a AVVIO HOST ===")
+        Logger.i(this, "hostname=$name uniqueid=${HostIdentity.uniqueId(this)}")
+        Logger.i(this, "IP LAN: $ip")
 
         try {
             http = GameStreamHttpServer(this).also { it.start(HostIdentity.HTTP_PORT) }
-            Logger.i(this, "HTTP in ascolto su 0.0.0.0:" + HostIdentity.HTTP_PORT)
+            Logger.i(this, "HTTP in ascolto su 0.0.0.0:${HostIdentity.HTTP_PORT}")
         } catch (e: Exception) {
             http = null
-            Logger.i(this, "HTTP AVVIO FALLITO: " + e.javaClass.simpleName + ": " + e.message)
+            Logger.i(this, "HTTP AVVIO FALLITO: ${e.javaClass.simpleName}: ${e.message}")
         }
 
         try {
             val ssl = TlsIdentity.sslContext(this)
             https = GameStreamHttpsServer(this).also { it.start(HostIdentity.HTTPS_PORT, ssl) }
-            Logger.i(this, "HTTPS in ascolto su 0.0.0.0:" + HostIdentity.HTTPS_PORT)
+            Logger.i(this, "HTTPS in ascolto su 0.0.0.0:${HostIdentity.HTTPS_PORT}")
         } catch (e: Exception) {
             https = null
-            Logger.i(this, "HTTPS AVVIO FALLITO: " + e.javaClass.simpleName + ": " + e.message)
+            Logger.i(this, "HTTPS AVVIO FALLITO: ${e.javaClass.simpleName}: ${e.message}")
         }
 
         if (mdns == null) {
@@ -109,6 +109,7 @@ class HostService : Service() {
     }
 
     override fun onDestroy() {
+        LaunchHandler.stop()
         mdns?.stop(); mdns = null
         https?.stop(); https = null
         http?.stop(); http = null
