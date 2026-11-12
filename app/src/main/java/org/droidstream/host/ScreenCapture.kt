@@ -89,15 +89,28 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             params.width, params.height, 320,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             surface, null, null)
+        Log.i(TAG, "VirtualDisplay creato")
     }
 
     private fun startEncoding() {
         val thread = Thread({
             val info = MediaCodec.BufferInfo()
             var frameIndex = 0
+            var waitCount = 0
             while (running) {
                 val idx = encoder?.dequeueOutputBuffer(info, 10000) ?: -1
-                if (idx >= 0) {
+                if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    waitCount++
+                    if (waitCount % 10 == 0) {
+                        Log.i(TAG, "Encoder in attesa di frame... (waitCount=$waitCount)")
+                    }
+                } else if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    Log.i(TAG, "Encoder: formato output cambiato")
+                } else if (idx == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+                    Log.i(TAG, "Encoder: buffer output cambiati")
+                } else if (idx >= 0) {
+                    waitCount = 0
+                    Log.i(TAG, "Encoder frame pronto: idx=$idx, size=${info.size}, flags=${info.flags}")
                     val buf = encoder?.getOutputBuffer(idx)
                     if (buf != null && info.size > 0) {
                         val data = ByteArray(info.size)
@@ -106,6 +119,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                         buf.get(data)
                         val key = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ||
                                 (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                        Log.i(TAG, "Chiamata a sendVideoFrame: size=${data.size}, key=$key")
                         NativeBridge.sendVideoFrame(
                             data, frameIndex, key,
                             remoteAddress?.address?.hostAddress ?: "192.168.1.239",
@@ -113,6 +127,8 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                         frameIndex++
                     }
                     encoder?.releaseOutputBuffer(idx, false)
+                } else {
+                    Log.e(TAG, "Encoder dequeueOutputBuffer valore inatteso: $idx")
                 }
             }
         }, "video-encoder")
