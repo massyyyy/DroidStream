@@ -129,16 +129,14 @@ class RtspServer(private val port: Int = 48010) {
                         writer.print("Session: DEADBEEFCAFE;timeout=90\r\n")
                         writer.print("\r\n")
                         writer.flush()
-                        Log.i(TAG, "PLAY received, starting video stream")
-                        // Signal to start streaming
-                        LaunchHandler.onPlayReceived()
+                        Log.i(TAG, "PLAY received, starting video stream (M3a placeholder)")
                     }
                     "TEARDOWN" -> {
                         writer.print("RTSP/1.0 200 OK\r\n")
                         writer.print("CSeq: $cseq\r\n")
                         writer.print("\r\n")
                         writer.flush()
-                        LaunchHandler.stopStreaming()
+                        Log.i(TAG, "TEARDOWN received, stopping video stream")
                     }
                 }
             }
