@@ -12,8 +12,8 @@ android {
         applicationId = "org.droidstream.host"
         minSdk = 23
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.0.1-m0"
+        versionCode = 2
+        versionName = "0.0.2-m2a"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64") }
         externalNativeBuild {
             cmake {
@@ -38,4 +38,7 @@ android {
     buildTypes { getByName("debug") { isMinifyEnabled = false } }
 }
 
-dependencies { implementation(kotlin("stdlib")) }
+dependencies {
+    implementation(kotlin("stdlib"))
+    implementation("org.bouncycastle:bcpkix-jdk15on:1.70")
+}
