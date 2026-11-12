@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""verify_refs v4 - estratti per M3 (RTSP, RTP, FEC)."""
+"""verify_refs v5 - scelta trasporto RTSP (ENet vs TCP)."""
 import argparse, io, os, re, sys, tarfile, urllib.request
 
-REPOS = {
-    "moonlight-common-c": ("moonlight-stream/moonlight-common-c", "master"),
-    "sunshine": ("LizardByte/Sunshine", "master"),
-}
+REPOS = {"moonlight-common-c": ("moonlight-stream/moonlight-common-c", "master")}
 
-def short(path):
-    parts = path.split("/")
-    return "/".join(parts[-2:]) if len(parts) > 1 else path
+def short(p):
+    x = p.split("/")
+    return "/".join(x[-2:]) if len(x) > 1 else p
 
-def keep(path):
-    p = path.replace("\\", "/")
-    return "/src/" in p and p.endswith((".c", ".h", ".cpp", ".hpp"))
+def keep(p):
+    p = p.replace("\\", "/")
+    return "/src/" in p and p.endswith((".c", ".h"))
 
 def fetch(repo, branch):
     url = "https://codeload.github.com/%s/tar.gz/refs/heads/%s" % (repo, branch)
@@ -30,67 +27,56 @@ def fetch(repo, branch):
                     pass
     return out
 
-def grep(files, pattern, cap=60, only=None):
+def grep(files, pattern, cap=120, only=None):
     rx = re.compile(pattern)
     hits = []
     for path in sorted(files):
         if only and only not in path:
             continue
-        for i, line in enumerate(files[path].splitlines(), 1):
-            if rx.search(line):
-                hits.append("%s:%d: %s" % (short(path), i, line.rstrip()[:220]))
+        for i, l in enumerate(files[path].splitlines(), 1):
+            if rx.search(l):
+                hits.append("%s:%d: %s" % (short(path), i, l.rstrip()[:220]))
                 if len(hits) >= cap:
                     return hits
     return hits or ["(nessuna corrispondenza)"]
 
-def body(files, filename, signature, count=60):
+def body(files, filename, sig, count=150):
     for path in sorted(files):
         if not path.endswith(filename):
             continue
         src = files[path].splitlines()
-        for i, line in enumerate(src):
-            if signature in line:
+        for i, l in enumerate(src):
+            if sig in l:
                 return ["%s:%d: %s" % (short(path), j + 1, src[j].rstrip()[:220])
                         for j in range(i, min(i + count, len(src)))]
-    return ["(non trovato: '%s' in %s)" % (signature, filename)]
+    return ["(non trovato: '%s' in %s)" % (sig, filename)]
 
-def block(title, lines):
-    return "## " + title + "\n\n```\n" + "\n".join(lines) + "\n```\n"
+def block(t, lines):
+    return "## " + t + "\n\n```\n" + "\n".join(lines) + "\n```\n"
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="docs")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    files, errors = {}, {}
+    files = {}
     for name, (repo, branch) in REPOS.items():
         try:
             got = fetch(repo, branch)
             files.update(got)
             print("  file utili:", len(got), flush=True)
         except Exception as e:
-            errors[name] = "%s: %s" % (type(e).__name__, e)
+            print("ERRORE", name, type(e).__name__, e, flush=True)
 
-    rtsp = ["# refs_report.rtsp - estratti per M3 (RTSP)", ""]
-    if errors:
-        rtsp += ["## Download falliti", ""] + ["- %s: %s" % (k, v) for k, v in errors.items()] + [""]
-    rtsp.append(block("RTSP inizio file", body(files, "rtsp.cpp", "#include", 560)))
-    rtsp.append(block("RTSP zona SETUP", body(files, "rtsp.cpp", "Handle RTSP SETUP", 300)))
-    rtsp.append(block("RTSP DESCRIBE", body(files, "rtsp.cpp", "Handle RTSP DESCRIBE", 300)))
-    rtsp.append(block("RTSP ANNOUNCE", body(files, "rtsp.cpp", "Handle RTSP ANNOUNCE", 300)))
-    rtsp.append(block("RTSP PLAY", body(files, "rtsp.cpp", "Handle RTSP PLAY", 200)))
-    rtsp.append(block("RtspParser.c (client, completo)", body(files, "RtspParser.c", "#include", 750)))
-    open(os.path.join(a.out, "refs_report.rtsp.md"), "w", encoding="utf-8").write("\n".join(rtsp))
-
-    rtp = ["# refs_report.rtp - estratti per M3 (RTP/FEC)", ""]
-    rtp.append(block("Struct RTP/payload", body(files, "Limelight-internal.h", "_RTP_HEADER", 130)))
-    rtp.append(block("FEC in Limelight-internal.h", grep(files, r"FEC|fec", cap=50, only="Limelight-internal.h")))
-    rtp.append(block("stream.cpp: video/fec/parity", grep(files, r"parity|shards|fecPercentage|sendVideo|broadcast|payloadSize|roundRobin", cap=70, only="stream.cpp")))
-    rtp.append(block("RtpVideoQueue.c: FEC", grep(files, r"FEC|fec|parity|shards", cap=60, only="RtpVideoQueue.c")))
-    rtp.append(block("VideoDepacketizer: header", grep(files, r"header|Header|payload|Payload", cap=60, only="VideoDepacketizer.c")))
-    open(os.path.join(a.out, "refs_report.rtp.md"), "w", encoding="utf-8").write("\n".join(rtp))
-
-    print("scritti refs_report.rtsp.md e refs_report.rtp.md", flush=True)
+    out = ["# refs_report.enet - scelta trasporto RTSP (ENet vs TCP)", ""]
+    out.append(block("Quali file usano ENet", grep(files, r"[Ee]net|ENET", cap=150)))
+    out.append(block("Connection.c: performRtspHandshake", body(files, "Connection.c", "performRtspHandshake", 260)))
+    out.append(block("Connection.c: LiStartConnection", body(files, "Connection.c", "int LiStartConnection", 200)))
+    out.append(block("Limelight.h: SERVER_INFORMATION", body(files, "Limelight.h", "_SERVER_INFORMATION", 90)))
+    out.append(block("rtspSessionUrl / porta RTSP", grep(files, r"rtspSessionUrl|RTSP_SETUP_PORT|rtspPort|48010", cap=60)))
+    out.append(block("Confronti di versione", grep(files, r"AppVersionQuad\[", cap=80)))
+    open(os.path.join(a.out, "refs_report.enet.md"), "w", encoding="utf-8").write("\n".join(out))
+    print("scritto refs_report.enet.md", flush=True)
     return 0
 
 if __name__ == "__main__":
