@@ -8,6 +8,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.projection.MediaProjectionManager
+import android.os.Bundle
 import android.util.Log
 import android.view.Surface
 import java.net.DatagramSocket
@@ -72,7 +73,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, params.bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, params.fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2) // Keyframe ogni 2 secondi
             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
             setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel32)
         }
@@ -80,6 +81,12 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
         encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         surface = encoder?.createInputSurface()
         encoder?.start()
+        
+        // FORZA un keyframe immediato per garantire che Moonlight abbia un punto di decodifica valido all'avvio
+        val bundle = Bundle()
+        bundle.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+        encoder?.setParameters(bundle)
+        
         Log.i(TAG, "Encoder configurato ${params.width}x${params.height}@${params.fps}")
     }
 
@@ -89,46 +96,43 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             params.width, params.height, 320,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             surface, null, null)
-        Log.i(TAG, "VirtualDisplay creato")
     }
 
     private fun startEncoding() {
         val thread = Thread({
             val info = MediaCodec.BufferInfo()
             var frameIndex = 0
-            var waitCount = 0
+            // Timestamp RTP: 90000 tick al secondo. Per 60fps, 1 frame = 1500 tick.
+            val timestampIncrement = 90000L / params.fps 
+            
             while (running) {
                 val idx = encoder?.dequeueOutputBuffer(info, 10000) ?: -1
                 if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    waitCount++
-                    if (waitCount % 10 == 0) {
-                        Log.i(TAG, "Encoder in attesa di frame... (waitCount=$waitCount)")
-                    }
+                    // Nessun frame pronto, continua ad aspettare
                 } else if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     Log.i(TAG, "Encoder: formato output cambiato")
                 } else if (idx == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
                     Log.i(TAG, "Encoder: buffer output cambiati")
                 } else if (idx >= 0) {
-                    waitCount = 0
-                    Log.i(TAG, "Encoder frame pronto: idx=$idx, size=${info.size}, flags=${info.flags}")
                     val buf = encoder?.getOutputBuffer(idx)
                     if (buf != null && info.size > 0) {
                         val data = ByteArray(info.size)
                         buf.position(info.offset)
                         buf.limit(info.offset + info.size)
                         buf.get(data)
+                        
                         val key = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ||
-                                (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
-                        Log.i(TAG, "Chiamata a sendVideoFrame: size=${data.size}, key=$key")
+                                  (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                        
+                        val rtpTimestamp = (frameIndex * timestampIncrement).toInt()
+                        
                         NativeBridge.sendVideoFrame(
-                            data, frameIndex, key,
+                            data, frameIndex, key, rtpTimestamp,
                             remoteAddress?.address?.hostAddress ?: "192.168.1.239",
                             remoteAddress?.port ?: 47998)
                         frameIndex++
                     }
                     encoder?.releaseOutputBuffer(idx, false)
-                } else {
-                    Log.e(TAG, "Encoder dequeueOutputBuffer valore inatteso: $idx")
                 }
             }
         }, "video-encoder")
