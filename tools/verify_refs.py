@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""verify_refs v3 - estratti mirati per M2b (pairing completo)."""
+"""verify_refs v4 - estratti per M3 (RTSP, RTP, FEC)."""
 import argparse, io, os, re, sys, tarfile, urllib.request
 
 REPOS = {
     "moonlight-common-c": ("moonlight-stream/moonlight-common-c", "master"),
     "sunshine": ("LizardByte/Sunshine", "master"),
-    "moonlight-android": ("moonlight-stream/moonlight-android", "master"),
 }
 
 def short(path):
@@ -14,11 +13,7 @@ def short(path):
 
 def keep(path):
     p = path.replace("\\", "/")
-    if p.endswith("PairingManager.java"):
-        return True
-    if "/src/" in p and p.endswith((".c", ".h", ".cpp", ".hpp")):
-        return True
-    return False
+    return "/src/" in p and p.endswith((".c", ".h", ".cpp", ".hpp"))
 
 def fetch(repo, branch):
     url = "https://codeload.github.com/%s/tar.gz/refs/heads/%s" % (repo, branch)
@@ -75,17 +70,27 @@ def main():
             print("  file utili:", len(got), flush=True)
         except Exception as e:
             errors[name] = "%s: %s" % (type(e).__name__, e)
-    out = ["# refs_report.pairing2 - estratti per M2b", ""]
+
+    rtsp = ["# refs_report.rtsp - estratti per M3 (RTSP)", ""]
     if errors:
-        out += ["## Download falliti", ""] + ["- %s: %s" % (k, v) for k, v in errors.items()] + [""]
-    out.append(block("DISPATCHER pair()", body(files, "nvhttp.cpp", "void pair(", 140)))
-    out.append(block("serverchallengeresp", body(files, "nvhttp.cpp", "void serverchallengeresp(", 70)))
-    out.append(block("clientpairingsecret", body(files, "nvhttp.cpp", "void clientpairingsecret(", 70)))
-    out.append(block("PIN e fail_pair", grep(files, r"fail_pair|async_insert_pin|insert_pin|pin\b", cap=50, only="nvhttp.cpp")))
-    out.append(block("crypto: chiavi e firme", grep(files, r"gen_aes_key|signature\(|::hash\(|sha256|SHA256", cap=50, only="crypto")))
-    out.append(block("PairingManager (lato client Moonlight)", body(files, "PairingManager.java", "class PairingManager", 430)))
-    open(os.path.join(a.out, "refs_report.pairing2.md"), "w", encoding="utf-8").write("\n".join(out))
-    print("scritto refs_report.pairing2.md", flush=True)
+        rtsp += ["## Download falliti", ""] + ["- %s: %s" % (k, v) for k, v in errors.items()] + [""]
+    rtsp.append(block("RTSP inizio file", body(files, "rtsp.cpp", "#include", 560)))
+    rtsp.append(block("RTSP zona SETUP", body(files, "rtsp.cpp", "Handle RTSP SETUP", 300)))
+    rtsp.append(block("RTSP DESCRIBE", body(files, "rtsp.cpp", "Handle RTSP DESCRIBE", 300)))
+    rtsp.append(block("RTSP ANNOUNCE", body(files, "rtsp.cpp", "Handle RTSP ANNOUNCE", 300)))
+    rtsp.append(block("RTSP PLAY", body(files, "rtsp.cpp", "Handle RTSP PLAY", 200)))
+    rtsp.append(block("RtspParser.c (client, completo)", body(files, "RtspParser.c", "#include", 750)))
+    open(os.path.join(a.out, "refs_report.rtsp.md"), "w", encoding="utf-8").write("\n".join(rtsp))
+
+    rtp = ["# refs_report.rtp - estratti per M3 (RTP/FEC)", ""]
+    rtp.append(block("Struct RTP/payload", body(files, "Limelight-internal.h", "_RTP_HEADER", 130)))
+    rtp.append(block("FEC in Limelight-internal.h", grep(files, r"FEC|fec", cap=50, only="Limelight-internal.h")))
+    rtp.append(block("stream.cpp: video/fec/parity", grep(files, r"parity|shards|fecPercentage|sendVideo|broadcast|payloadSize|roundRobin", cap=70, only="stream.cpp")))
+    rtp.append(block("RtpVideoQueue.c: FEC", grep(files, r"FEC|fec|parity|shards", cap=60, only="RtpVideoQueue.c")))
+    rtp.append(block("VideoDepacketizer: header", grep(files, r"header|Header|payload|Payload", cap=60, only="VideoDepacketizer.c")))
+    open(os.path.join(a.out, "refs_report.rtp.md"), "w", encoding="utf-8").write("\n".join(rtp))
+
+    print("scritti refs_report.rtsp.md e refs_report.rtp.md", flush=True)
     return 0
 
 if __name__ == "__main__":
