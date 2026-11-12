@@ -12,8 +12,7 @@ class RtspServer(private val port: Int = 48010) {
     private val TAG = "RtspServer"
     private var serverSocket: ServerSocket? = null
     private val running = AtomicBoolean(false)
-    private var clientSocket: Socket? = null
-    
+
     fun start() {
         if (running.get()) return
         running.set(true)
@@ -23,110 +22,133 @@ class RtspServer(private val port: Int = 48010) {
                 serverSocket?.reuseAddress = true
                 Log.i(TAG, "RTSP server listening on port $port")
                 while (running.get()) {
-                    val socket = serverSocket?.accept() ?: break
-                    clientSocket = socket
-                    handleClient(socket)
+                    val s = serverSocket?.accept() ?: break
+                    // UNA CONNESSIONE PER THREAD: non blocchiamo l'accept
+                    Thread({ handleClient(s) }, "rtsp-conn").apply { isDaemon = true }.start()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "RTSP server error: ${e.message}")
+                if (running.get()) Log.e(TAG, "RTSP server error: ${e.message}")
             }
-        }, "rtsp-server").apply { isDaemon = true }.start()
+        }, "rtsp-accept").apply { isDaemon = true }.start()
     }
-    
+
     fun stop() {
         running.set(false)
         try { serverSocket?.close() } catch (e: Exception) {}
-        try { clientSocket?.close() } catch (e: Exception) {}
         serverSocket = null
-        clientSocket = null
     }
-    
+
+    // Gestisce UN comando e poi CHIUDE la connessione (come Sunshine).
     private fun handleClient(socket: Socket) {
         try {
+            socket.soTimeout = 10000
+            Log.i(TAG, "RTSP connection from ${socket.inetAddress}")
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             val writer = PrintWriter(socket.getOutputStream(), true)
-            
-            while (running.get() && !socket.isClosed) {
-                val requestLine = reader.readLine() ?: break
-                val headers = mutableMapOf<String, String>()
-                var contentLength = 0
-                var payload = ""
-                
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (line.isEmpty()) break
-                    val colon = line.indexOf(':')
-                    if (colon > 0) {
-                        val key = line.substring(0, colon).trim()
-                        val value = line.substring(colon + 1).trim()
-                        headers[key.lowercase()] = value
-                        if (key.lowercase() == "content-length") {
-                            contentLength = value.toIntOrNull() ?: 0
-                        }
-                    }
-                }
-                
-                if (contentLength > 0) {
-                    val payloadBuffer = CharArray(contentLength)
-                    reader.read(payloadBuffer, 0, contentLength)
-                    payload = String(payloadBuffer)
-                }
-                
-                Log.i(TAG, "RTSP request: $requestLine")
-                
-                val parts = requestLine.split(" ")
-                if (parts.size < 3) continue
-                
-                val method = parts[0]
-                val cseq = headers["cseq"]?.toIntOrNull() ?: 0
-                
-                when (method) {
-                    "OPTIONS" -> {
-                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nPublic: OPTIONS, DESCRIBE, SETUP, ANNOUNCE, PLAY, TEARDOWN\r\n\r\n")
-                        writer.flush()
-                    }
-                    "DESCRIBE" -> {
-                        val sdp = """v=0
-o=- 0 0 IN IP4 0.0.0.0
-s=Moonlight
-c=IN IP4 0.0.0.0
-t=0 0
-a=x-ss-general.featureFlags:135
-a=x-ss-general.encryptionSupported:1
-a=x-ss-general.encryptionRequested:0
-a=x-nv-video[0].refPicInvalidation:1
-sprop-parameter-sets=AAAAAU
-a=rtpmap:97 H264/90000
-a=fmtp:97 packetization-mode=1; profile-level-id=42001f
-a=fmtp:97 surround-params=21101234567
-"""
-                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nContent-Type: application/sdp\r\nContent-Length: ${sdp.length}\r\n\r\n$sdp")
-                        writer.flush()
-                    }
-                    "SETUP" -> {
-                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nSession: DEADBEEFCAFE;timeout=90\r\nTransport: RTP/AVP/UDP;unicast;server_port=47998\r\n\r\n")
-                        writer.flush()
-                    }
-                    "ANNOUNCE" -> {
-                        Log.i(TAG, "ANNOUNCE payload: $payload")
-                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\n\r\n")
-                        writer.flush()
-                    }
-                    "PLAY" -> {
-                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nSession: DEADBEEFCAFE;timeout=90\r\n\r\n")
-                        writer.flush()
-                        Log.i(TAG, "PLAY received - starting video stream")
-                        LaunchHandler.screenCapture?.startSending()
-                    }
-                    "TEARDOWN" -> {
-                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\n\r\n")
-                        writer.flush()
-                        LaunchHandler.stop()
-                    }
+
+            val requestLine = reader.readLine() ?: return
+            val headers = mutableMapOf<String, String>()
+            var contentLength = 0
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty()) break
+                val colon = line.indexOf(':')
+                if (colon > 0) {
+                    val k = line.substring(0, colon).trim().lowercase()
+                    val v = line.substring(colon + 1).trim()
+                    headers[k] = v
+                    if (k == "content-length") contentLength = v.toIntOrNull() ?: 0
                 }
             }
+            var payload = ""
+            if (contentLength > 0) {
+                val buf = CharArray(contentLength)
+                var read = 0
+                while (read < contentLength) {
+                    val n = reader.read(buf, read, contentLength - read)
+                    if (n < 0) break
+                    read += n
+                }
+                payload = String(buf, 0, read)
+            }
+
+            Log.i(TAG, "RTSP request: $requestLine")
+            val parts = requestLine.split(" ")
+            if (parts.size < 3) return
+            val method = parts[0]
+            val target = parts[1]
+            val cseq = headers["cseq"]?.toIntOrNull() ?: 0
+
+            when (method) {
+                "OPTIONS" -> respond(writer, cseq,
+                    "Public: OPTIONS, DESCRIBE, SETUP, ANNOUNCE, PLAY, TEARDOWN\r\n")
+                "DESCRIBE" -> {
+                    val sdp = buildSdp()
+                    writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\n" +
+                        "Content-Type: application/sdp\r\nContent-Length: ${sdp.length}\r\n\r\n$sdp")
+                    writer.flush()
+                }
+                "SETUP" -> {
+                    val type = when {
+                        target.contains("video") -> "video"
+                        target.contains("audio") -> "audio"
+                        target.contains("control") -> "control"
+                        else -> "video"
+                    }
+                    val serverPort = when (type) {
+                        "audio" -> 48000
+                        "control" -> 47999
+                        else -> 47998
+                    }
+                    val extra = if (type == "control")
+                        "X-SS-Connect-Data: 1234567890\r\n"
+                    else
+                        "X-SS-Ping-Payload: 0000000000000000\r\n"
+                    respond(writer, cseq,
+                        "Session: DEADBEEFCAFE;timeout = 90\r\n" +
+                        "Transport: server_port=$serverPort\r\n$extra")
+                }
+                "ANNOUNCE" -> {
+                    Log.i(TAG, "ANNOUNCE payload:\n$payload")
+                    respond(writer, cseq, "")
+                }
+                "PLAY" -> {
+                    respond(writer, cseq, "Session: DEADBEEFCAFE;timeout = 90\r\n")
+                    Log.i(TAG, "PLAY received - starting video stream")
+                    LaunchHandler.screenCapture?.startSending()
+                }
+                "TEARDOWN" -> {
+                    respond(writer, cseq, "")
+                    LaunchHandler.stop()
+                }
+                else -> respond(writer, cseq, "")
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Client handling error: ${e.message}")
+            Log.e(TAG, "RTSP client error: ${e.message}")
+        } finally {
+            // CHIAVE: chiudiamo dopo ogni comando, come Sunshine
+            try { socket.close() } catch (e: Exception) {}
         }
+    }
+
+    private fun respond(writer: PrintWriter, cseq: Int, extraHeaders: String) {
+        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\n$extraHeaders\r\n")
+        writer.flush()
+    }
+
+    private fun buildSdp(): String {
+        return "v=0\r\n" +
+            "o=- 0 0 IN IP4 0.0.0.0\r\n" +
+            "s=Moonlight\r\n" +
+            "c=IN IP4 0.0.0.0\r\n" +
+            "t=0 0\r\n" +
+            "a=x-ss-general.featureFlags:135\r\n" +
+            "a=x-ss-general.encryptionSupported:1\r\n" +
+            "a=x-ss-general.encryptionRequested:0\r\n" +
+            "a=x-nv-video[0].refPicInvalidation:1\r\n" +
+            "sprop-parameter-sets=AAAAAU\r\n" +
+            "a=rtpmap:97 H264/90000\r\n" +
+            "a=fmtp:97 packetization-mode=1; profile-level-id=42001f\r\n" +
+            "a=fmtp:97 surround-params=211012\r\n"
     }
 }
