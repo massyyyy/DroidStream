@@ -44,7 +44,7 @@ class GameStreamHttpServer(private val ctx: Context) {
 
     private fun handle(s: Socket) {
         try {
-            s.soTimeout = 5000
+            s.soTimeout = 130000
             val reader = s.getInputStream().bufferedReader()
             val requestLine = reader.readLine() ?: return
             while (true) {
@@ -53,20 +53,23 @@ class GameStreamHttpServer(private val ctx: Context) {
             }
             val parts = requestLine.split(" ")
             if (parts.size < 2) return
-            val path = parts[1].substringBefore('?')
+            val full = parts[1]
+            val path = full.substringBefore('?')
+            val query = Pairing.parseQuery(if (full.contains('?')) full.substringAfter('?') else "")
             requestCount++
             lastRequest = requestLine
-            Logger.i(ctx, "HTTP " + requestLine + " da " + s.inetAddress.hostAddress)
+            Logger.i(ctx, "HTTP " + requestLine.take(400) + " da " + s.inetAddress.hostAddress)
 
             val localIp = s.localAddress.hostAddress ?: "127.0.0.1"
-            val body: String
-            val status: String
-            when (path) {
-                "/serverinfo" -> { status = "200 OK"; body = serverInfoXml(localIp) }
-                else -> { status = "404 Not Found"; body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"404\"/>" }
+            val res: Pair<Int, String> = when (path) {
+                "/serverinfo" -> Pairing.serverInfoXml(ctx, localIp, false, query["uniqueid"]) { ps ->
+                    ServerInfoXml.build(ctx, localIp, ps)
+                }
+                "/pair" -> Pairing.handlePair(ctx, query, false)
+                else -> Pair(404, ServerInfoXml.NOT_FOUND)
             }
-            val bytes = body.toByteArray(Charsets.UTF_8)
-            val head = "HTTP/1.1 " + status + "\r\n" +
+            val bytes = res.second.toByteArray(Charsets.UTF_8)
+            val head = "HTTP/1.1 " + res.first + " " + (if (res.first == 200) "OK" else "Error") + "\r\n" +
                     "Content-Type: text/xml; charset=utf-8\r\n" +
                     "Content-Length: " + bytes.size + "\r\n" +
                     "Connection: close\r\n\r\n"
@@ -74,36 +77,11 @@ class GameStreamHttpServer(private val ctx: Context) {
             s.getOutputStream().write(bytes)
             s.getOutputStream().flush()
         } catch (e: Exception) {
-            Logger.i(ctx, "conn: " + e.message)
+            Logger.i(ctx, "http conn: " + e.message)
         } finally {
             try { s.close() } catch (e: Exception) {}
         }
     }
-
-    // Campi e ordine copiati da Sunshine nvhttp.cpp:1260-1303
-    private fun serverInfoXml(localIp: String): String {
-        val sb = StringBuilder()
-        sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-        sb.append("<root status_code=\"200\">")
-        sb.append("<hostname>").append(esc(HostIdentity.hostname(ctx))).append("</hostname>")
-        sb.append("<appversion>").append(HostIdentity.APP_VERSION).append("</appversion>")
-        sb.append("<GfeVersion>").append(HostIdentity.GFE_VERSION).append("</GfeVersion>")
-        sb.append("<uniqueid>").append(HostIdentity.uniqueId(ctx)).append("</uniqueid>")
-        sb.append("<HttpsPort>").append(HostIdentity.HTTPS_PORT).append("</HttpsPort>")
-        sb.append("<ExternalPort>").append(HostIdentity.HTTP_PORT).append("</ExternalPort>")
-        sb.append("<MaxLumaPixelsHEVC>0</MaxLumaPixelsHEVC>")
-        sb.append("<mac>00:00:00:00:00:00</mac>")
-        sb.append("<LocalIP>").append(esc(localIp)).append("</LocalIP>")
-        sb.append("<ServerCodecModeSupport>1</ServerCodecModeSupport>")
-        sb.append("<PairStatus>0</PairStatus>")
-        sb.append("<currentgame>0</currentgame>")
-        sb.append("<state>SUNSHINE_SERVER_FREE</state>")
-        sb.append("</root>")
-        return sb.toString()
-    }
-
-    private fun esc(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     fun selfTest(): String {
         return try {
