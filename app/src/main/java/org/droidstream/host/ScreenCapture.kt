@@ -1,104 +1,140 @@
 package org.droidstream.host
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.os.Build
 import android.util.Log
+import android.view.Surface
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
 
-class ScreenCapture(private val ctx: Context, private val params: LaunchHandler.LaunchParams) {
+class ScreenCapture(private val context: Context, private val params: LaunchHandler.LaunchParams) {
     private val TAG = "ScreenCapture"
-    private var isRunning = false
-    private var isSending = false
+    private var mediaProjection: android.media.projection.MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    private var encoder: MediaCodec? = null
+    private var surface: Surface? = null
     private var videoSocket: DatagramSocket? = null
-    private var clientAddress: InetAddress? = null
-    private var clientPort: Int = 47998
+    private var remoteAddress: InetSocketAddress? = null
+    @Volatile private var running = false
+    private var encoderThread: Thread? = null
+
+    companion object {
+        const val REQUEST_CODE_MEDIA_PROJECTION = 1001
+    }
 
     fun start() {
-        isRunning = true
         Log.i(TAG, "ScreenCapture initialized: ${params.width}x${params.height}@${params.fps}fps")
-        try {
-            videoSocket = DatagramSocket()
-            clientAddress = InetAddress.getByName("192.168.1.239") 
-            clientPort = 47998
-            Log.i(TAG, "Video socket ready, target: ${clientAddress}:${clientPort}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to init video socket", e)
-        }
     }
 
-    fun startSending() {
-        if (isSending) return
-        isSending = true
-        Log.i(TAG, "Starting RTP stream...")
-        Thread { sendDummyRtp() }.apply { isDaemon = true }.start()
-    }
-
-    private fun sendDummyRtp() {
-        var seq = 0
-        var timestamp = 0L
-        val fps = params.fps.coerceAtLeast(1)
-        val frameTimeUs = 1000000L / fps
+    fun startWithProjection(resultCode: Int, data: Intent) {
+        val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+        mediaProjection = projectionManager.getMediaProjection(resultCode, data)
         
-        while (isRunning && isSending) {
-            try {
-                // Payload H.264 fittizio (SPS + PPS + IDR)
-                val nalu = byteArrayOf(
-                    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 
-                    0x67.toByte(), 0x42.toByte(), 0x00.toByte(), 0x1f.toByte(),
-                    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 
-                    0x68.toByte(), 0xce.toByte(), 0x3c.toByte(), 0x80.toByte(),
-                    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 
-                    0x65.toByte(), 0xb8.toByte(), 0x00.toByte(), 0x00.toByte()
-                )
-                
-                // Header NV_VIDEO_PACKET semplificato (12 byte)
-                val header = ByteArray(12)
-                header[0] = 0x01.toByte() // FLAG_SOF | FLAG_EOF
-                header[4] = ((seq shr 24) and 0xFF).toByte()
-                header[5] = ((seq shr 16) and 0xFF).toByte()
-                header[6] = ((seq shr 8) and 0xFF).toByte()
-                header[7] = (seq and 0xFF).toByte()
-                
-                val payload = header + nalu
-                
-                // RTP Header (12 byte)
-                val rtpHeader = ByteArray(12)
-                rtpHeader[0] = 0x80.toByte() // V=2
-                rtpHeader[1] = 0x60.toByte() // PT=96
-                rtpHeader[2] = ((seq shr 8) and 0xFF).toByte()
-                rtpHeader[3] = (seq and 0xFF).toByte()
-                val ts = ((timestamp / 1000 * 90) and 0xFFFFFFFFL).toInt()
-                rtpHeader[4] = ((ts shr 24) and 0xFF).toByte()
-                rtpHeader[5] = ((ts shr 16) and 0xFF).toByte()
-                rtpHeader[6] = ((ts shr 8) and 0xFF).toByte()
-                rtpHeader[7] = (ts and 0xFF).toByte()
-                rtpHeader[8] = 0x01.toByte()
-                rtpHeader[9] = 0x02.toByte()
-                rtpHeader[10] = 0x03.toByte()
-                rtpHeader[11] = 0x04.toByte()
-                
-                val packetData = rtpHeader + payload
-                val packet = DatagramPacket(packetData, packetData.size, clientAddress, clientPort)
-                videoSocket?.send(packet)
-                
-                Log.d(TAG, "Sent RTP seq=$seq")
-                seq = (seq + 1) and 0xFFFF
-                timestamp += frameTimeUs
-                
-                Thread.sleep(frameTimeUs / 1000)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending RTP", e)
-                break
+        if (mediaProjection == null) {
+            Log.e(TAG, "Failed to get MediaProjection")
+            return
+        }
+
+        setupEncoder()
+        setupVideoSocket()
+        startVirtualDisplay()
+        startEncoding()
+    }
+
+    private fun setupEncoder() {
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, params.width, params.height).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, params.bitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, params.fps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            
+            // Profilo e livello per compatibilità
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh)
+                setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel4)
             }
         }
+
+        encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        surface = encoder?.createInputSurface()
+        encoder?.start()
+        
+        Log.i(TAG, "Encoder configured: ${params.width}x${params.height}@${params.fps}fps bitrate=${params.bitrate}")
+    }
+
+    private fun setupVideoSocket() {
+        videoSocket = DatagramSocket()
+        // L'indirizzo remoto è quello del client Moonlight (dal SETUP RTSP)
+        // Per ora usiamo un placeholder, verrà aggiornato quando riceviamo il SETUP
+        remoteAddress = InetSocketAddress("192.168.1.239", 47998)
+        Log.i(TAG, "Video socket ready, target: $remoteAddress")
+    }
+
+    private fun startVirtualDisplay() {
+        virtualDisplay = mediaProjection?.createVirtualDisplay(
+            "DroidStream",
+            params.width,
+            params.height,
+            320, // DPI
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            surface,
+            null,
+            null
+        )
+        Log.i(TAG, "VirtualDisplay created")
+    }
+
+    private fun startEncoding() {
+        running = true
+        encoderThread = Thread {
+            val bufferInfo = MediaCodec.BufferInfo()
+            var frameIndex = 0
+            
+            while (running) {
+                val outputIndex = encoder?.dequeueOutputBuffer(bufferInfo, 10000) ?: -1
+                
+                if (outputIndex >= 0) {
+                    val outputBuffer = encoder?.getOutputBuffer(outputIndex)
+                    if (outputBuffer != null && bufferInfo.size > 0) {
+                        outputBuffer.position(bufferInfo.offset)
+                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                        
+                        val data = ByteArray(bufferInfo.size)
+                        outputBuffer.get(data)
+                        
+                        // Invia al packetizer nativo
+                        val isKeyframe = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                        NativeBridge.sendVideoFrame(data, frameIndex, isKeyframe, remoteAddress?.address ?: "192.168.1.239", remoteAddress?.port ?: 47998)
+                        
+                        frameIndex++
+                    }
+                    encoder?.releaseOutputBuffer(outputIndex, false)
+                }
+            }
+        }
+        encoderThread?.start()
+        Log.i(TAG, "Starting RTP stream...")
     }
 
     fun stop() {
-        isRunning = false
-        isSending = false
+        running = false
+        encoderThread?.join(1000)
+        virtualDisplay?.release()
+        surface?.release()
+        encoder?.stop()
+        encoder?.release()
         videoSocket?.close()
-        videoSocket = null
+        mediaProjection?.stop()
         Log.i(TAG, "ScreenCapture stopped")
     }
 }
