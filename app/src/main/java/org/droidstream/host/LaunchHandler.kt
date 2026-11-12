@@ -5,6 +5,7 @@ import android.util.Log
 
 object LaunchHandler {
     private const val TAG = "LaunchHandler"
+    private const val CONTROL_ENET_PORT = 47999
 
     data class LaunchParams(
         val appId: Int, val width: Int, val height: Int, val fps: Int,
@@ -16,6 +17,7 @@ object LaunchHandler {
 
     var rtspServer: RtspServer? = null
     var screenCapture: ScreenCapture? = null
+    private var enetStarted = false
 
     fun handleLaunch(ctx: Context, query: Map<String, String>): Pair<Int, String> {
         val appId = query["appid"]?.toIntOrNull() ?: return errorXml(400, "Missing appid")
@@ -36,6 +38,10 @@ object LaunchHandler {
 
         if (rtspServer == null) rtspServer = RtspServer(48010).apply { start() }
         if (screenCapture == null) screenCapture = ScreenCapture(ctx, activeSession!!).apply { start() }
+        if (!enetStarted) {
+            enetStarted = NativeBridge.enetStart(CONTROL_ENET_PORT)
+            Log.i(TAG, "ENet control server su UDP $CONTROL_ENET_PORT: " + if (enetStarted) "OK" else "FALLITO")
+        }
 
         val ip = ServerInfoXml.lanIpv4()
         val xml = """<?xml version="1.0" encoding="utf-8"?>
@@ -64,6 +70,7 @@ object LaunchHandler {
     fun stop() {
         screenCapture?.stop(); screenCapture = null
         rtspServer?.stop(); rtspServer = null
+        if (enetStarted) { NativeBridge.enetStop(); enetStarted = false }
         activeSession = null
     }
 }
