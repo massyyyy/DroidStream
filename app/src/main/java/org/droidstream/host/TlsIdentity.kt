@@ -12,6 +12,7 @@ import java.math.BigInteger
 import java.security.KeyPair
 import java.security.KeyStore
 import java.security.PrivateKey
+import java.security.cert.Certificate
 import java.security.cert.X509Certificate
 import java.util.Date
 import javax.net.ssl.KeyManagerFactory
@@ -48,14 +49,14 @@ object TlsIdentity {
         }
         val gen = generate()
         ks.load(null, null)
-        ks.setKeyEntry(ALIAS, gen.first, KS_PASS.toCharArray(), arrayOf(gen.second))
+        ks.setKeyEntry(ALIAS, gen.first, KS_PASS.toCharArray(), arrayOf<Certificate>(gen.second))
         FileOutputStream(file).use { ks.store(it, KS_PASS.toCharArray()) }
         Logger.i(ctx, "certificato TLS generato e salvato in " + file.name)
         return ks
     }
 
     private fun generate(): Pair<PrivateKey, X509Certificate> {
-        val kpg = KeyPairGenerator.getInstance("RSA")
+        val kpg = java.security.KeyPairGenerator.getInstance("RSA")
         kpg.initialize(2048)
         val kp: KeyPair = kpg.generateKeyPair()
         val subject = X500Name("CN=DroidStream Host")
