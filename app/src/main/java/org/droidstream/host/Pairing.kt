@@ -206,11 +206,11 @@ object Pairing {
         val key = sess.aesKey ?: return xml(400, "Cipher key not set", null)
         loadKeys(ctx)
         val dec = aesEcb(Cipher.DECRYPT_MODE, key, unhex(challengeHex))
-        val sign = cachedCert!!.getSigBytes()
+        val sign = cachedCert!!.signature  // CORRETTO: signature invece di getSigBytes()
         val secret = rand(16)
-        val hash = sha256(dec + sign + secret)
+        val hash = sha256(dec.plus(sign).plus(secret))  // CORRETTO: plus() invece di +
         val challenge = rand(16)
-        val enc = aesEcb(Cipher.ENCRYPT_MODE, key, hash + challenge)
+        val enc = aesEcb(Cipher.ENCRYPT_MODE, key, hash.plus(challenge))
         sess.serverSecret = secret
         sess.serverChallenge = challenge
         sess.phase = PHASE_CLIENT_CHALLENGE
@@ -225,7 +225,7 @@ object Pairing {
         sess.clientHash = aesEcb(Cipher.DECRYPT_MODE, key, unhex(respHex))
         val sig = signBytes(secret, ctx)
         sess.phase = PHASE_SERVER_RESP
-        return xml(200, null, mapOf("paired" to "1", "pairingsecret" to hex(secret + sig)))
+        return xml(200, null, mapOf("paired" to "1", "pairingsecret" to hex(secret.plus(sig))))
     }
 
     // fase 4 (nvhttp.cpp:869-914)
@@ -238,7 +238,9 @@ object Pairing {
         val paired = try {
             val clientCert = CertificateFactory.getInstance("X.509")
                 .generateCertificate(sess.clientCertPem.byteInputStream()) as X509Certificate
-            val data = (sess.serverChallenge ?: ByteArray(0)) + clientCert.getSigBytes() + secret
+            val challenge = sess.serverChallenge ?: ByteArray(0)
+            val certSig = clientCert.signature  // CORRETTO: signature invece di getSigBytes()
+            val data = challenge.plus(certSig).plus(secret)  // CORRETTO: plus() invece di +
             val sameHash = sha256(data).contentEquals(sess.clientHash ?: ByteArray(0))
             val v = Signature.getInstance("SHA256withRSA")
             v.initVerify(clientCert.publicKey)
