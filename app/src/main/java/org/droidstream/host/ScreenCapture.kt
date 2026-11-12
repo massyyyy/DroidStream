@@ -11,6 +11,7 @@ import android.util.Log
 import android.view.Surface
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
+import android.content.Intent
 
 class ScreenCapture(private val context: Context, private val params: LaunchHandler.LaunchParams) {
 
@@ -37,7 +38,13 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             Log.i(TAG, "In attesa del consenso di registrazione schermo...")
         }
     }
-
+    
+    fun startWithProjection(resultCode: Int, data: Intent) {
+        ProjectionHolder.resultCode = resultCode
+        ProjectionHolder.data = data
+        begin()
+    }
+    
     fun begin() {
         if (running) return
         val data = ProjectionHolder.data ?: return
@@ -118,6 +125,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
 
     companion object {
         private const val TAG = "ScreenCapture"
+        const val REQUEST_CODE_MEDIA_PROJECTION = 1001
         @Volatile var pending: ScreenCapture? = null
             private set
         fun onProjectionGranted() { pending?.begin() }
