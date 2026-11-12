@@ -52,7 +52,6 @@ class RtspServer(private val port: Int = 48010) {
                 var contentLength = 0
                 var payload = ""
                 
-                // Parse headers
                 while (true) {
                     val line = reader.readLine() ?: break
                     if (line.isEmpty()) break
@@ -67,7 +66,6 @@ class RtspServer(private val port: Int = 48010) {
                     }
                 }
                 
-                // Parse payload if present
                 if (contentLength > 0) {
                     val payloadBuffer = CharArray(contentLength)
                     reader.read(payloadBuffer, 0, contentLength)
@@ -76,7 +74,6 @@ class RtspServer(private val port: Int = 48010) {
                 
                 Log.i(TAG, "RTSP request: $requestLine")
                 
-                // Parse request
                 val parts = requestLine.split(" ")
                 if (parts.size < 3) continue
                 
@@ -85,68 +82,11 @@ class RtspServer(private val port: Int = 48010) {
                 
                 when (method) {
                     "OPTIONS" -> {
-                        writer.print("RTSP/1.0 200 OK\r\n")
-                        writer.print("CSeq: $cseq\r\n")
-                        writer.print("Public: OPTIONS, DESCRIBE, SETUP, ANNOUNCE, PLAY, TEARDOWN\r\n")
-                        writer.print("\r\n")
+                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nPublic: OPTIONS, DESCRIBE, SETUP, ANNOUNCE, PLAY, TEARDOWN\r\n\r\n")
                         writer.flush()
-                        Log.i(TAG, "Sent OPTIONS response")
                     }
                     "DESCRIBE" -> {
-                        val sdp = buildSdp()
-                        writer.print("RTSP/1.0 200 OK\r\n")
-                        writer.print("CSeq: $cseq\r\n")
-                        writer.print("Content-Type: application/sdp\r\n")
-                        writer.print("Content-Length: ${sdp.length}\r\n")
-                        writer.print("\r\n")
-                        writer.print(sdp)
-                        writer.flush()
-                        Log.i(TAG, "Sent DESCRIBE response with SDP")
-                    }
-                    "SETUP" -> {
-                        writer.print("RTSP/1.0 200 OK\r\n")
-                        writer.print("CSeq: $cseq\r\n")
-                        writer.print("Session: DEADBEEFCAFE;timeout=90\r\n")
-                        writer.print("Transport: RTP/AVP/UDP;unicast;server_port=47998\r\n")
-                        writer.print("\r\n")
-                        writer.flush()
-                        Log.i(TAG, "Sent SETUP response")
-                    }
-                    "ANNOUNCE" -> {
-                        Log.i(TAG, "ANNOUNCE payload: $payload")
-                        writer.print("RTSP/1.0 200 OK\r\n")
-                        writer.print("CSeq: $cseq\r\n")
-                        writer.print("\r\n")
-                        writer.flush()
-                        Log.i(TAG, "Sent ANNOUNCE response")
-                    }
-                    "PLAY" -> {
-                        writer.print("RTSP/1.0 200 OK\r\n")
-                        writer.print("CSeq: $cseq\r\n")
-                        writer.print("Session: DEADBEEFCAFE;timeout=90\r\n")
-                        writer.print("\r\n")
-                        writer.flush()
-                        Log.i(TAG, "PLAY received - starting video stream")
-                    }
-                    "TEARDOWN" -> {
-                        writer.print("RTSP/1.0 200 OK\r\n")
-                        writer.print("CSeq: $cseq\r\n")
-                        writer.print("\r\n")
-                        writer.flush()
-                        Log.i(TAG, "TEARDOWN received")
-                    }
-                    else -> {
-                        Log.w(TAG, "Unknown RTSP method: $method")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Client handling error: ${e.message}")
-        }
-    }
-    
-    private fun buildSdp(): String {
-        return """v=0
+                        val sdp = """v=0
 o=- 0 0 IN IP4 0.0.0.0
 s=Moonlight
 c=IN IP4 0.0.0.0
@@ -158,9 +98,35 @@ a=x-nv-video[0].refPicInvalidation:1
 sprop-parameter-sets=AAAAAU
 a=rtpmap:97 H264/90000
 a=fmtp:97 packetization-mode=1; profile-level-id=42001f
-a=rtpmap:98 AV1/90000
-a=fmtp:98 surround-params=21101234567
 a=fmtp:97 surround-params=21101234567
 """
+                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nContent-Type: application/sdp\r\nContent-Length: ${sdp.length}\r\n\r\n$sdp")
+                        writer.flush()
+                    }
+                    "SETUP" -> {
+                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nSession: DEADBEEFCAFE;timeout=90\r\nTransport: RTP/AVP/UDP;unicast;server_port=47998\r\n\r\n")
+                        writer.flush()
+                    }
+                    "ANNOUNCE" -> {
+                        Log.i(TAG, "ANNOUNCE payload: $payload")
+                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\n\r\n")
+                        writer.flush()
+                    }
+                    "PLAY" -> {
+                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nSession: DEADBEEFCAFE;timeout=90\r\n\r\n")
+                        writer.flush()
+                        Log.i(TAG, "PLAY received - starting video stream")
+                        LaunchHandler.screenCapture?.startSending()
+                    }
+                    "TEARDOWN" -> {
+                        writer.print("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\n\r\n")
+                        writer.flush()
+                        LaunchHandler.stop()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Client handling error: ${e.message}")
+        }
     }
 }
