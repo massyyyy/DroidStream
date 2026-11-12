@@ -12,7 +12,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-/* Header RTP (12 byte) */
 typedef struct {
     uint8_t  cc_src_len;
     uint8_t  payload_type;
@@ -21,7 +20,6 @@ typedef struct {
     uint32_t ssrc;
 } __attribute__((packed)) RTP_HEADER;
 
-/* Header video NV (4 byte dopo l'RTP) */
 typedef struct {
     uint8_t packet_type;
     uint8_t frame_index;
@@ -48,13 +46,22 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
     (void) clazz;
     (void) is_keyframe;
 
-    int sock = ensure_socket();
-    if (sock < 0) return -1;
-
     jsize frame_len = (*env)->GetArrayLength(env, frame_data);
-    jbyte *frame_bytes = (*env)->GetByteArrayElements(env, frame_data, NULL);
     const char *addr_str = (*env)->GetStringUTFChars(env, remote_addr, NULL);
-    if (frame_bytes == NULL || addr_str == NULL) return -1;
+    
+    LOGI("sendVideoFrame CHIAMATA: len=%d, frame=%d, addr=%s:%d", frame_len, frame_index, addr_str, remote_port);
+
+    int sock = ensure_socket();
+    if (sock < 0) {
+        LOGE("Socket non valido");
+        goto cleanup;
+    }
+
+    jbyte *frame_bytes = (*env)->GetByteArrayElements(env, frame_data, NULL);
+    if (frame_bytes == NULL || addr_str == NULL) {
+        LOGE("Dati o indirizzo nulli");
+        goto cleanup;
+    }
 
     struct sockaddr_in remote;
     memset(&remote, 0, sizeof(remote));
@@ -78,30 +85,42 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
         if (packet == NULL) break;
 
         RTP_HEADER *rtp = (RTP_HEADER *) packet;
-        rtp->cc_src_len   = 0x80;          /* versione RTP 2 */
-        rtp->payload_type = 96;            /* tipo dinamico */
+        rtp->cc_src_len   = 0x80;
+        rtp->payload_type = 96;
         rtp->seq_num      = htons(g_seq_num++);
-        rtp->timestamp    = htonl((uint32_t) frame_index * 1500u);  /* clock 90 kHz, 60 fps */
+        rtp->timestamp    = htonl((uint32_t) frame_index * 1500u);
         rtp->ssrc         = htonl(g_ssrc);
 
         NV_VIDEO_HEADER *nv = (NV_VIDEO_HEADER *) (packet + sizeof(RTP_HEADER));
-        nv->packet_type = 0;               /* dati, non FEC */
+        nv->packet_type = 0;
         nv->frame_index = (uint8_t) (frame_index & 0xFF);
         nv->flags = 0;
-        if (offset == 0) nv->flags |= 0x01;                    /* inizio frame */
-        if (offset + payload_size >= frame_len) nv->flags |= 0x02;  /* fine frame */
+        if (offset == 0) nv->flags |= 0x01;
+        if (offset + payload_size >= frame_len) nv->flags |= 0x02;
         nv->stream_id = 0;
 
         memcpy(packet + header_size, frame_bytes + offset, (size_t) payload_size);
-        sendto(sock, packet, (size_t) packet_len, 0,
+        
+        int sent = sendto(sock, packet, (size_t) packet_len, 0,
                (const struct sockaddr *) &remote, sizeof(remote));
+        if (sent < 0) {
+            LOGE("sendto fallito: %d", sent);
+        } else {
+            packet_count++;
+        }
         free(packet);
 
         offset += payload_size;
-        packet_count++;
     }
 
-    (*env)->ReleaseByteArrayElements(env, frame_data, frame_bytes, JNI_ABORT);
-    (*env)->ReleaseStringUTFChars(env, remote_addr, addr_str);
+cleanup:
+    if (frame_bytes != NULL) {
+        (*env)->ReleaseByteArrayElements(env, frame_data, frame_bytes, JNI_ABORT);
+    }
+    if (addr_str != NULL) {
+        (*env)->ReleaseStringUTFChars(env, remote_addr, addr_str);
+    }
+    
+    LOGI("sendVideoFrame COMPLETATA: pacchetti inviati=%d", packet_count);
     return packet_count;
 }
