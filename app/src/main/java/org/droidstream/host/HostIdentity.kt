@@ -14,10 +14,10 @@ object HostIdentity {
     const val UDP_AUDIO_PORT = 48000
 
     // CORRETTO dal crash reale: Moonlight PairingManager esige 4 componenti
-    // ("Malformed server version field: 0.23.1"). 7.1.400.0 e' il livello GFE
+    // ("Malformed server version field: 0.23.1"). 7.1.431.0 e' il livello GFE
     // di riferimento per GameStream.
-    const val APP_VERSION = "7.1.400.0"
-    const val GFE_VERSION = "7.1.400.0"
+    const val APP_VERSION = "7.1.431.0"
+    const val GFE_VERSION = "7.1.431.0"
 
     private const val PREFS = "droidstream_host"
 
