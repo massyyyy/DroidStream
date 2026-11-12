@@ -23,7 +23,6 @@ class RtspServer(private val port: Int = 48010) {
                 Log.i(TAG, "RTSP server listening on port $port")
                 while (running.get()) {
                     val s = serverSocket?.accept() ?: break
-                    // UNA CONNESSIONE PER THREAD: non blocchiamo l'accept
                     Thread({ handleClient(s) }, "rtsp-conn").apply { isDaemon = true }.start()
                 }
             } catch (e: Exception) {
@@ -38,7 +37,6 @@ class RtspServer(private val port: Int = 48010) {
         serverSocket = null
     }
 
-    // Gestisce UN comando e poi CHIUDE la connessione (come Sunshine).
     private fun handleClient(socket: Socket) {
         try {
             socket.soTimeout = 10000
@@ -126,7 +124,6 @@ class RtspServer(private val port: Int = 48010) {
         } catch (e: Exception) {
             Log.e(TAG, "RTSP client error: ${e.message}")
         } finally {
-            // CHIAVE: chiudiamo dopo ogni comando, come Sunshine
             try { socket.close() } catch (e: Exception) {}
         }
     }
