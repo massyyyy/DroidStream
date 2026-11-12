@@ -19,8 +19,6 @@ class ScreenCapture(private val ctx: Context, private val params: LaunchHandler.
         Log.i(TAG, "ScreenCapture initialized: ${params.width}x${params.height}@${params.fps}fps")
         try {
             videoSocket = DatagramSocket()
-            // NOTA: In M3b prenderemo l'IP reale dal comando SETUP di RTSP.
-            // Per M3a usiamo un placeholder per testare la connettività.
             clientAddress = InetAddress.getByName("192.168.1.239") 
             clientPort = 47998
             Log.i(TAG, "Video socket ready, target: ${clientAddress}:${clientPort}")
@@ -44,20 +42,23 @@ class ScreenCapture(private val ctx: Context, private val params: LaunchHandler.
         
         while (isRunning && isSending) {
             try {
-                // Payload H.264 fittizio (SPS + PPS + IDR) per soddisfare il depacketizer di Moonlight
+                // Payload H.264 fittizio (SPS + PPS + IDR)
                 val nalu = byteArrayOf(
-                    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f,
-                    0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
-                    0x00, 0x00, 0x00, 0x01, 0x65, 0xb8, 0x00, 0x00
+                    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 
+                    0x67.toByte(), 0x42.toByte(), 0x00.toByte(), 0x1f.toByte(),
+                    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 
+                    0x68.toByte(), 0xce.toByte(), 0x3c.toByte(), 0x80.toByte(),
+                    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 
+                    0x65.toByte(), 0xb8.toByte(), 0x00.toByte(), 0x00.toByte()
                 )
                 
-                // Header NV_VIDEO_PACKET semplificato
+                // Header NV_VIDEO_PACKET semplificato (12 byte)
                 val header = ByteArray(12)
-                header[0] = 0x01 // FLAG_SOF | FLAG_EOF
-                header[4] = (seq shr 24).toByte()
-                header[5] = (seq shr 16).toByte()
-                header[6] = (seq shr 8).toByte()
-                header[7] = seq.toByte()
+                header[0] = 0x01.toByte() // FLAG_SOF | FLAG_EOF
+                header[4] = ((seq shr 24) and 0xFF).toByte()
+                header[5] = ((seq shr 16) and 0xFF).toByte()
+                header[6] = ((seq shr 8) and 0xFF).toByte()
+                header[7] = (seq and 0xFF).toByte()
                 
                 val payload = header + nalu
                 
@@ -65,14 +66,17 @@ class ScreenCapture(private val ctx: Context, private val params: LaunchHandler.
                 val rtpHeader = ByteArray(12)
                 rtpHeader[0] = 0x80.toByte() // V=2
                 rtpHeader[1] = 0x60.toByte() // PT=96
-                rtpHeader[2] = (seq shr 8).toByte()
-                rtpHeader[3] = seq.toByte()
-                val ts = (timestamp / 1000 * 90).toInt()
-                rtpHeader[4] = (ts shr 24).toByte()
-                rtpHeader[5] = (ts shr 16).toByte()
-                rtpHeader[6] = (ts shr 8).toByte()
-                rtpHeader[7] = ts.toByte()
-                rtpHeader[8] = 0x01; rtpHeader[9] = 0x02; rtpHeader[10] = 0x03; rtpHeader[11] = 0x04
+                rtpHeader[2] = ((seq shr 8) and 0xFF).toByte()
+                rtpHeader[3] = (seq and 0xFF).toByte()
+                val ts = ((timestamp / 1000 * 90) and 0xFFFFFFFFL).toInt()
+                rtpHeader[4] = ((ts shr 24) and 0xFF).toByte()
+                rtpHeader[5] = ((ts shr 16) and 0xFF).toByte()
+                rtpHeader[6] = ((ts shr 8) and 0xFF).toByte()
+                rtpHeader[7] = (ts and 0xFF).toByte()
+                rtpHeader[8] = 0x01.toByte()
+                rtpHeader[9] = 0x02.toByte()
+                rtpHeader[10] = 0x03.toByte()
+                rtpHeader[11] = 0x04.toByte()
                 
                 val packetData = rtpHeader + payload
                 val packet = DatagramPacket(packetData, packetData.size, clientAddress, clientPort)
