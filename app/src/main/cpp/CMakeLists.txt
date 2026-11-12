@@ -4,7 +4,7 @@ project(droidstream_native C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
-# --- ENet ---
+# --- ENet: scaricato automaticamente da GitHub ---
 include(FetchContent)
 FetchContent_Declare(
     enet_src
@@ -15,6 +15,7 @@ if(NOT enet_src_POPULATED)
     FetchContent_Populate(enet_src)
 endif()
 
+# --- Compiliamo ENet come libreria statica ---
 add_library(enet_vendor STATIC
     ${enet_src_SOURCE_DIR}/callbacks.c
     ${enet_src_SOURCE_DIR}/compress.c
@@ -34,7 +35,7 @@ target_compile_definitions(enet_vendor PRIVATE
     HAS_GETHOSTBYNAME_R=1
 )
 
-# --- Libreria principale ---
+# --- La nostra libreria nativa ---
 add_library(droidstream_native SHARED
     native_bridge.cpp
     control_enet.c
