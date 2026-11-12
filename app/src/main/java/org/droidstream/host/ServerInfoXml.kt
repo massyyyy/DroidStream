@@ -1,13 +1,34 @@
 package org.droidstream.host
 
 import android.content.Context
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
 object ServerInfoXml {
 
     const val NOT_FOUND = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"404\"/>"
 
-    // Campi e ordine: Sunshine nvhttp.cpp:1260-1303
+    // Restituisce SEMPRE l'IPv4 della LAN, ignorando IPv6/loopback
+    fun lanIpv4(): String {
+        try {
+            val ifaces = NetworkInterface.getNetworkInterfaces()
+            while (ifaces.hasMoreElements()) {
+                val ni = ifaces.nextElement()
+                if (!ni.isUp || ni.isLoopback) continue
+                val addrs = ni.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (a is Inet4Address && !a.isLoopbackAddress && a.isSiteLocalAddress) {
+                        return a.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) {}
+        return "192.168.1.218"
+    }
+
     fun build(ctx: Context, localIp: String, pairStatus: Int): String {
+        val ip = lanIpv4()
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
         sb.append("<root status_code=\"200\">")
@@ -19,7 +40,7 @@ object ServerInfoXml {
         sb.append("<ExternalPort>").append(HostIdentity.HTTP_PORT).append("</ExternalPort>")
         sb.append("<MaxLumaPixelsHEVC>0</MaxLumaPixelsHEVC>")
         sb.append("<mac>00:00:00:00:00:00</mac>")
-        sb.append("<LocalIP>").append(esc(localIp)).append("</LocalIP>")
+        sb.append("<LocalIP>").append(esc(ip)).append("</LocalIP>")
         sb.append("<ServerCodecModeSupport>1</ServerCodecModeSupport>")
         sb.append("<PairStatus>").append(pairStatus).append("</PairStatus>")
         sb.append("<currentgame>0</currentgame>")
