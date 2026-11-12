@@ -1,23 +1,19 @@
 package org.droidstream.host
 
-import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.os.Build
+import android.media.projection.MediaProjectionManager
 import android.util.Log
 import android.view.Surface
-import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
-import java.nio.ByteBuffer
 
 class ScreenCapture(private val context: Context, private val params: LaunchHandler.LaunchParams) {
-    private val TAG = "ScreenCapture"
+
     private var mediaProjection: android.media.projection.MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var encoder: MediaCodec? = null
@@ -27,27 +23,33 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     @Volatile private var running = false
     private var encoderThread: Thread? = null
 
-    companion object {
-        const val REQUEST_CODE_MEDIA_PROJECTION = 1001
-    }
-
     fun start() {
         Log.i(TAG, "ScreenCapture initialized: ${params.width}x${params.height}@${params.fps}fps")
+        videoSocket = DatagramSocket()
+        remoteAddress = InetSocketAddress("192.168.1.239", 47998)
+        Log.i(TAG, "Video socket ready, target: $remoteAddress")
+
+        if (ProjectionHolder.has()) {
+            begin()
+        } else {
+            pending = this
+            ProjectionActivity.start(context)
+            Log.i(TAG, "In attesa del consenso di registrazione schermo...")
+        }
     }
 
-    fun startWithProjection(resultCode: Int, data: Intent) {
-        val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-        mediaProjection = projectionManager.getMediaProjection(resultCode, data)
-        
-        if (mediaProjection == null) {
-            Log.e(TAG, "Failed to get MediaProjection")
-            return
-        }
+    fun begin() {
+        if (running) return
+        val data = ProjectionHolder.data ?: return
+        val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjection = mpm.getMediaProjection(ProjectionHolder.resultCode, data)
+        if (mediaProjection == null) { Log.e(TAG, "MediaProjection null"); return }
 
         setupEncoder()
-        setupVideoSocket()
         startVirtualDisplay()
         startEncoding()
+        running = true
+        Log.i(TAG, "Cattura schermo avviata")
     }
 
     private fun setupEncoder() {
@@ -56,85 +58,68 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             setInteger(MediaFormat.KEY_BIT_RATE, params.bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, params.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            
-            // Profilo e livello per compatibilità
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh)
-                setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel4)
-            }
+            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel32)
         }
-
         encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         surface = encoder?.createInputSurface()
         encoder?.start()
-        
-        Log.i(TAG, "Encoder configured: ${params.width}x${params.height}@${params.fps}fps bitrate=${params.bitrate}")
-    }
-
-    private fun setupVideoSocket() {
-        videoSocket = DatagramSocket()
-        // L'indirizzo remoto è quello del client Moonlight (dal SETUP RTSP)
-        // Per ora usiamo un placeholder, verrà aggiornato quando riceviamo il SETUP
-        remoteAddress = InetSocketAddress("192.168.1.239", 47998)
-        Log.i(TAG, "Video socket ready, target: $remoteAddress")
+        Log.i(TAG, "Encoder configurato ${params.width}x${params.height}@${params.fps}")
     }
 
     private fun startVirtualDisplay() {
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "DroidStream",
-            params.width,
-            params.height,
-            320, // DPI
+            params.width, params.height, 320,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            surface,
-            null,
-            null
-        )
-        Log.i(TAG, "VirtualDisplay created")
+            surface, null, null)
     }
 
     private fun startEncoding() {
-        running = true
-        encoderThread = Thread {
-            val bufferInfo = MediaCodec.BufferInfo()
+        encoderThread = Thread({
+            val info = MediaCodec.BufferInfo()
             var frameIndex = 0
-            
             while (running) {
-                val outputIndex = encoder?.dequeueOutputBuffer(bufferInfo, 10000) ?: -1
-                
-                if (outputIndex >= 0) {
-                    val outputBuffer = encoder?.getOutputBuffer(outputIndex)
-                    if (outputBuffer != null && bufferInfo.size > 0) {
-                        outputBuffer.position(bufferInfo.offset)
-                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                        
-                        val data = ByteArray(bufferInfo.size)
-                        outputBuffer.get(data)
-                        
-                        // Invia al packetizer nativo
-                        val isKeyframe = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                        NativeBridge.sendVideoFrame(data, frameIndex, isKeyframe, remoteAddress?.address ?: "192.168.1.239", remoteAddress?.port ?: 47998)
-                        
+                val idx = encoder?.dequeueOutputBuffer(info, 10000) ?: -1
+                if (idx >= 0) {
+                    val buf = encoder?.getOutputBuffer(idx)
+                    if (buf != null && info.size > 0) {
+                        val data = ByteArray(info.size)
+                        buf.position(info.offset)
+                        buf.limit(info.offset + info.size)
+                        buf.get(data)
+                        val key = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ||
+                                  (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                        NativeBridge.sendVideoFrame(
+                            data, frameIndex, key,
+                            remoteAddress?.address?.hostAddress ?: "192.168.1.239",
+                            remoteAddress?.port ?: 47998)
                         frameIndex++
                     }
-                    encoder?.releaseOutputBuffer(outputIndex, false)
+                    encoder?.releaseOutputBuffer(idx, false)
                 }
             }
-        }
-        encoderThread?.start()
+        }, "video-encoder").apply { isDaemon = true }.start()
         Log.i(TAG, "Starting RTP stream...")
     }
 
     fun stop() {
         running = false
-        encoderThread?.join(1000)
+        if (pending === this) pending = null
+        encoderThread?.join(500)
         virtualDisplay?.release()
         surface?.release()
-        encoder?.stop()
-        encoder?.release()
+        try { encoder?.stop(); encoder?.release() } catch (e: Exception) {}
         videoSocket?.close()
         mediaProjection?.stop()
         Log.i(TAG, "ScreenCapture stopped")
+    }
+
+    companion object {
+        private const val TAG = "ScreenCapture"
+        @Volatile var pending: ScreenCapture? = null
+            private set
+        fun onProjectionGranted() { pending?.begin() }
     }
 }
