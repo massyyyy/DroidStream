@@ -34,7 +34,7 @@ class GameStreamHttpsServer(private val ctx: Context) {
                 val s = ss.accept()
                 Thread({ handle(s) }, "gs-https-conn").apply { isDaemon = true }.start()
             } catch (e: Exception) {
-                if (running.get()) Logger.i(ctx, "https accept: " + e.javaClass.simpleName + ": " + e.message)
+                if (running.get()) Logger.i(ctx, "https accept: " + e.message)
                 return
             }
         }
@@ -42,7 +42,7 @@ class GameStreamHttpsServer(private val ctx: Context) {
 
     private fun handle(s: Socket) {
         try {
-            s.soTimeout = 8000
+            s.soTimeout = 130000
             val reader = s.getInputStream().bufferedReader()
             val requestLine = reader.readLine() ?: return
             while (true) {
@@ -53,29 +53,20 @@ class GameStreamHttpsServer(private val ctx: Context) {
             if (parts.size < 2) return
             val full = parts[1]
             val path = full.substringBefore('?')
-            val query = if (full.contains('?')) full.substringAfter('?') else ""
-            Logger.i(ctx, "HTTPS " + requestLine + " da " + s.inetAddress.hostAddress)
+            val query = Pairing.parseQuery(if (full.contains('?')) full.substringAfter('?') else "")
+            Logger.i(ctx, "HTTPS " + requestLine.take(400) + " da " + s.inetAddress.hostAddress)
 
             val localIp = s.localAddress.hostAddress ?: "127.0.0.1"
-            val status: String
-            val body: String
-            when (path) {
-                "/serverinfo" -> {
-                    status = "200 OK"
-                    body = serverInfoXml(localIp)
+            val res: Pair<Int, String> = when (path) {
+                "/serverinfo" -> Pairing.serverInfoXml(ctx, localIp, true, query["uniqueid"]) { ps ->
+                    ServerInfoXml.build(ctx, localIp, ps)
                 }
-                "/pair" -> {
-                    Logger.i(ctx, "HTTPS PAIR RICHIESTO query=" + query)
-                    status = "404 Not Found"
-                    body = NOT_FOUND
-                }
-                else -> {
-                    status = "404 Not Found"
-                    body = NOT_FOUND
-                }
+                "/pair" -> Pairing.handlePair(ctx, query, true)
+                "/applist" -> Pairing.applistXml()
+                else -> Pair(404, ServerInfoXml.NOT_FOUND)
             }
-            val bytes = body.toByteArray(Charsets.UTF_8)
-            val head = "HTTP/1.1 " + status + "\r\n" +
+            val bytes = res.second.toByteArray(Charsets.UTF_8)
+            val head = "HTTP/1.1 " + res.first + " " + (if (res.first == 200) "OK" else "Error") + "\r\n" +
                     "Content-Type: text/xml; charset=utf-8\r\n" +
                     "Content-Length: " + bytes.size + "\r\n" +
                     "Connection: close\r\n\r\n"
@@ -87,35 +78,5 @@ class GameStreamHttpsServer(private val ctx: Context) {
         } finally {
             try { s.close() } catch (e: Exception) {}
         }
-    }
-
-    // Campi copiati da Sunshine nvhttp.cpp:1260-1303.
-    // PairStatus=0 e mac finto finche' non esiste il pairing (M2b).
-    private fun serverInfoXml(localIp: String): String {
-        val sb = StringBuilder()
-        sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-        sb.append("<root status_code=\"200\">")
-        sb.append("<hostname>").append(esc(HostIdentity.hostname(ctx))).append("</hostname>")
-        sb.append("<appversion>").append(HostIdentity.APP_VERSION).append("</appversion>")
-        sb.append("<GfeVersion>").append(HostIdentity.GFE_VERSION).append("</GfeVersion>")
-        sb.append("<uniqueid>").append(HostIdentity.uniqueId(ctx)).append("</uniqueid>")
-        sb.append("<HttpsPort>").append(HostIdentity.HTTPS_PORT).append("</HttpsPort>")
-        sb.append("<ExternalPort>").append(HostIdentity.HTTP_PORT).append("</ExternalPort>")
-        sb.append("<MaxLumaPixelsHEVC>0</MaxLumaPixelsHEVC>")
-        sb.append("<mac>00:00:00:00:00:00</mac>")
-        sb.append("<LocalIP>").append(esc(localIp)).append("</LocalIP>")
-        sb.append("<ServerCodecModeSupport>1</ServerCodecModeSupport>")
-        sb.append("<PairStatus>0</PairStatus>")
-        sb.append("<currentgame>0</currentgame>")
-        sb.append("<state>SUNSHINE_SERVER_FREE</state>")
-        sb.append("</root>")
-        return sb.toString()
-    }
-
-    private fun esc(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
-
-    private companion object {
-        const val NOT_FOUND = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"404\"/>"
     }
 }
