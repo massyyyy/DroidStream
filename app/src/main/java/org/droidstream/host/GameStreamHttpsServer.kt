@@ -63,6 +63,7 @@ class GameStreamHttpsServer(private val ctx: Context) {
                 }
                 "/pair" -> Pairing.handlePair(ctx, query, true)
                 "/applist" -> Pairing.applistXml()
+                "/launch" -> LaunchHandler.handleLaunch(ctx, query)
                 else -> Pair(404, ServerInfoXml.NOT_FOUND)
             }
             val bytes = res.second.toByteArray(Charsets.UTF_8)
