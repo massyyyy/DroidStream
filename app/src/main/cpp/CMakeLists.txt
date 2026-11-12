@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 17)
 include(FetchContent)
 FetchContent_Declare(
     enet_src
-    URL https://codeload.github.com/enet-org/enet/tar.gz/refs/heads/master
+    URL https://github.com/lsalzman/enet/archive/refs/tags/v1.3.18.tar.gz
 )
 FetchContent_GetProperties(enet_src)
 if(NOT enet_src_POPULATED)
