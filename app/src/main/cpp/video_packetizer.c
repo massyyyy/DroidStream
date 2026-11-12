@@ -9,7 +9,6 @@
 #include <arpa/inet.h>
 
 #define TAG "DroidStreamNative"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 typedef struct {
@@ -41,7 +40,7 @@ static int ensure_socket(void) {
 
 JNIEXPORT jint JNICALL
 Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
-        jbyteArray frame_data, jint frame_index, jboolean is_keyframe,
+        jbyteArray frame_data, jint frame_index, jboolean is_keyframe, jint rtp_timestamp,
         jstring remote_addr, jint remote_port) {
     (void) clazz;
     (void) is_keyframe;
@@ -49,19 +48,11 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
     jsize frame_len = (*env)->GetArrayLength(env, frame_data);
     const char *addr_str = (*env)->GetStringUTFChars(env, remote_addr, NULL);
     
-    LOGI("sendVideoFrame CHIAMATA: len=%d, frame=%d, addr=%s:%d", frame_len, frame_index, addr_str, remote_port);
-
     int sock = ensure_socket();
-    if (sock < 0) {
-        LOGE("Socket non valido");
-        goto cleanup;
-    }
+    if (sock < 0) goto cleanup;
 
     jbyte *frame_bytes = (*env)->GetByteArrayElements(env, frame_data, NULL);
-    if (frame_bytes == NULL || addr_str == NULL) {
-        LOGE("Dati o indirizzo nulli");
-        goto cleanup;
-    }
+    if (frame_bytes == NULL || addr_str == NULL) goto cleanup;
 
     struct sockaddr_in remote;
     memset(&remote, 0, sizeof(remote));
@@ -88,24 +79,22 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
         rtp->cc_src_len   = 0x80;
         rtp->payload_type = 96;
         rtp->seq_num      = htons(g_seq_num++);
-        rtp->timestamp    = htonl((uint32_t) frame_index * 1500u);
+        rtp->timestamp    = htonl((uint32_t) rtp_timestamp);
         rtp->ssrc         = htonl(g_ssrc);
 
         NV_VIDEO_HEADER *nv = (NV_VIDEO_HEADER *) (packet + sizeof(RTP_HEADER));
         nv->packet_type = 0;
         nv->frame_index = (uint8_t) (frame_index & 0xFF);
         nv->flags = 0;
-        if (offset == 0) nv->flags |= 0x01;
-        if (offset + payload_size >= frame_len) nv->flags |= 0x02;
+        if (offset == 0) nv->flags |= 0x01; // SOF
+        if (offset + payload_size >= frame_len) nv->flags |= 0x02; // EOF
         nv->stream_id = 0;
 
         memcpy(packet + header_size, frame_bytes + offset, (size_t) payload_size);
         
         int sent = sendto(sock, packet, (size_t) packet_len, 0,
                (const struct sockaddr *) &remote, sizeof(remote));
-        if (sent < 0) {
-            LOGE("sendto fallito: %d", sent);
-        } else {
+        if (sent >= 0) {
             packet_count++;
         }
         free(packet);
@@ -121,6 +110,5 @@ cleanup:
         (*env)->ReleaseStringUTFChars(env, remote_addr, addr_str);
     }
     
-    LOGI("sendVideoFrame COMPLETATA: pacchetti inviati=%d", packet_count);
     return packet_count;
 }
