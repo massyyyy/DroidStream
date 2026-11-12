@@ -16,6 +16,7 @@ class HostService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var http: GameStreamHttpServer? = null
+    private var https: GameStreamHttpsServer? = null
     private var mdns: MdnsAdvertiser? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -39,7 +40,7 @@ class HostService : Service() {
                       else @Suppress("DEPRECATION") Notification.Builder(this)
         val notification = builder
             .setContentTitle(name)
-            .setContentText("Host attivo - " + ip + ":" + HostIdentity.HTTP_PORT)
+            .setContentText("Host attivo - " + ip)
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setOngoing(true)
             .build()
@@ -63,7 +64,7 @@ class HostService : Service() {
             wifiLock?.acquire()
         }
 
-        Logger.i(this, "=== M1.1 AVVIO HOST ===")
+        Logger.i(this, "=== M2a AVVIO HOST ===")
         Logger.i(this, "hostname=" + name + " uniqueid=" + HostIdentity.uniqueId(this))
         Logger.i(this, "IP LAN: " + ip)
 
@@ -73,6 +74,15 @@ class HostService : Service() {
         } catch (e: Exception) {
             http = null
             Logger.i(this, "HTTP AVVIO FALLITO: " + e.javaClass.simpleName + ": " + e.message)
+        }
+
+        try {
+            val ssl = TlsIdentity.sslContext(this)
+            https = GameStreamHttpsServer(this).also { it.start(HostIdentity.HTTPS_PORT, ssl) }
+            Logger.i(this, "HTTPS in ascolto su 0.0.0.0:" + HostIdentity.HTTPS_PORT)
+        } catch (e: Exception) {
+            https = null
+            Logger.i(this, "HTTPS AVVIO FALLITO: " + e.javaClass.simpleName + ": " + e.message)
         }
 
         if (mdns == null) {
@@ -100,6 +110,7 @@ class HostService : Service() {
 
     override fun onDestroy() {
         mdns?.stop(); mdns = null
+        https?.stop(); https = null
         http?.stop(); http = null
         wifiLock?.let { if (it.isHeld) it.release() }; wifiLock = null
         wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null
