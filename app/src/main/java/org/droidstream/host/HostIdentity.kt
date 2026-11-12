@@ -13,8 +13,10 @@ object HostIdentity {
     const val UDP_CONTROL_PORT = 47999
     const val UDP_AUDIO_PORT = 48000
 
-    // DA VERIFICARE: costanti reali di Sunshine (non estratte dal dump)
-    const val APP_VERSION = "0.23.1"
+    // CORRETTO dal crash reale: Moonlight PairingManager esige 4 componenti
+    // ("Malformed server version field: 0.23.1"). 7.1.400.0 e' il livello GFE
+    // di riferimento per GameStream.
+    const val APP_VERSION = "7.1.400.0"
     const val GFE_VERSION = "7.1.400.0"
 
     private const val PREFS = "droidstream_host"
