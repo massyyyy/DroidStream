@@ -1,6 +1,7 @@
 package org.droidstream.host
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
@@ -11,7 +12,6 @@ import android.util.Log
 import android.view.Surface
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
-import android.content.Intent
 
 class ScreenCapture(private val context: Context, private val params: LaunchHandler.LaunchParams) {
 
@@ -26,10 +26,11 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
 
     fun start() {
         Log.i(TAG, "ScreenCapture initialized: ${params.width}x${params.height}@${params.fps}fps")
-        videoSocket = DatagramSocket()
-        remoteAddress = InetSocketAddress("192.168.1.239", 47998)
-        Log.i(TAG, "Video socket ready, target: $remoteAddress")
-
+        if (videoSocket == null) {
+            videoSocket = DatagramSocket()
+            remoteAddress = InetSocketAddress("192.168.1.239", 47998)
+            Log.i(TAG, "Video socket ready, target: $remoteAddress")
+        }
         if (ProjectionHolder.has()) {
             begin()
         } else {
@@ -38,20 +39,27 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             Log.i(TAG, "In attesa del consenso di registrazione schermo...")
         }
     }
-    
+
     fun startWithProjection(resultCode: Int, data: Intent) {
         ProjectionHolder.resultCode = resultCode
         ProjectionHolder.data = data
         begin()
     }
-    
+
+    fun startSending() {
+        Log.i(TAG, "startSending() richiesto")
+        if (!running) start()
+    }
+
     fun begin() {
         if (running) return
         val data = ProjectionHolder.data ?: return
         val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mpm.getMediaProjection(ProjectionHolder.resultCode, data)
-        if (mediaProjection == null) { Log.e(TAG, "MediaProjection null"); return }
-
+        if (mediaProjection == null) {
+            Log.e(TAG, "MediaProjection null")
+            return
+        }
         setupEncoder()
         startVirtualDisplay()
         startEncoding()
@@ -84,7 +92,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     }
 
     private fun startEncoding() {
-        encoderThread = Thread({
+        val thread = Thread({
             val info = MediaCodec.BufferInfo()
             var frameIndex = 0
             while (running) {
@@ -97,7 +105,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                         buf.limit(info.offset + info.size)
                         buf.get(data)
                         val key = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ||
-                                  (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                                (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
                         NativeBridge.sendVideoFrame(
                             data, frameIndex, key,
                             remoteAddress?.address?.hostAddress ?: "192.168.1.239",
@@ -107,7 +115,10 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                     encoder?.releaseOutputBuffer(idx, false)
                 }
             }
-        }, "video-encoder").apply { isDaemon = true }.start()
+        }, "video-encoder")
+        thread.isDaemon = true
+        thread.start()
+        encoderThread = thread
         Log.i(TAG, "Starting RTP stream...")
     }
 
@@ -117,17 +128,27 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
         encoderThread?.join(500)
         virtualDisplay?.release()
         surface?.release()
-        try { encoder?.stop(); encoder?.release() } catch (e: Exception) {}
+        try {
+            encoder?.stop()
+            encoder?.release()
+        } catch (e: Exception) {
+        }
         videoSocket?.close()
+        videoSocket = null
         mediaProjection?.stop()
+        mediaProjection = null
         Log.i(TAG, "ScreenCapture stopped")
     }
 
     companion object {
         private const val TAG = "ScreenCapture"
         const val REQUEST_CODE_MEDIA_PROJECTION = 1001
-        @Volatile var pending: ScreenCapture? = null
+        @Volatile
+        var pending: ScreenCapture? = null
             private set
-        fun onProjectionGranted() { pending?.begin() }
+
+        fun onProjectionGranted() {
+            pending?.begin()
+        }
     }
 }
