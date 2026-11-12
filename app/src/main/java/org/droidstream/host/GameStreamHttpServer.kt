@@ -2,24 +2,26 @@ package org.droidstream.host
 
 import android.content.Context
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLServerSocket
 
-class GameStreamHttpsServer(private val ctx: Context) {
+class GameStreamHttpServer(private val ctx: Context) {
 
-    private var serverSocket: SSLServerSocket? = null
+    private var serverSocket: ServerSocket? = null
     private val running = AtomicBoolean(false)
 
-    fun start(port: Int, ssl: SSLContext) {
+    @Volatile var requestCount: Int = 0
+    @Volatile var lastRequest: String = "(nessuna richiesta)"
+
+    fun start(port: Int) {
         if (running.get()) return
-        val ss = ssl.serverSocketFactory.createServerSocket() as SSLServerSocket
+        val ss = ServerSocket()
         ss.reuseAddress = true
         ss.bind(InetSocketAddress(port))
         serverSocket = ss
         running.set(true)
-        Thread({ acceptLoop(ss) }, "gs-https-accept").apply { isDaemon = true }.start()
+        Thread({ acceptLoop(ss) }, "gs-http-accept").apply { isDaemon = true }.start()
     }
 
     fun stop() {
@@ -28,13 +30,13 @@ class GameStreamHttpsServer(private val ctx: Context) {
         serverSocket = null
     }
 
-    private fun acceptLoop(ss: SSLServerSocket) {
+    private fun acceptLoop(ss: ServerSocket) {
         while (running.get()) {
             try {
                 val s = ss.accept()
-                Thread({ handle(s) }, "gs-https-conn").apply { isDaemon = true }.start()
+                Thread({ handle(s) }, "gs-http-conn").apply { isDaemon = true }.start()
             } catch (e: Exception) {
-                if (running.get()) Logger.i(ctx, "https accept: " + e.message)
+                if (running.get()) Logger.i(ctx, "accept: " + e.message)
                 return
             }
         }
@@ -54,15 +56,16 @@ class GameStreamHttpsServer(private val ctx: Context) {
             val full = parts[1]
             val path = full.substringBefore('?')
             val query = Pairing.parseQuery(if (full.contains('?')) full.substringAfter('?') else "")
-            Logger.i(ctx, "HTTPS " + requestLine.take(400) + " da " + s.inetAddress.hostAddress)
+            requestCount++
+            lastRequest = requestLine
+            Logger.i(ctx, "HTTP " + requestLine.take(400) + " da " + s.inetAddress.hostAddress)
 
             val localIp = s.localAddress.hostAddress ?: "127.0.0.1"
             val res: Pair<Int, String> = when (path) {
-                "/serverinfo" -> Pairing.serverInfoXml(ctx, localIp, true, query["uniqueid"]) { ps ->
+                "/serverinfo" -> Pairing.serverInfoXml(ctx, localIp, false, query["uniqueid"]) { ps ->
                     ServerInfoXml.build(ctx, localIp, ps)
                 }
-                "/pair" -> Pairing.handlePair(ctx, query, true)
-                "/applist" -> Pairing.applistXml()
+                "/pair" -> Pairing.handlePair(ctx, query, false)
                 "/launch" -> LaunchHandler.handleLaunch(ctx, query)
                 "/appasset" -> Pair(200, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"200\"/>")
                 else -> Pair(404, ServerInfoXml.NOT_FOUND)
@@ -76,9 +79,26 @@ class GameStreamHttpsServer(private val ctx: Context) {
             s.getOutputStream().write(bytes)
             s.getOutputStream().flush()
         } catch (e: Exception) {
-            Logger.i(ctx, "https conn: " + e.javaClass.simpleName + ": " + e.message)
+            Logger.i(ctx, "http conn: " + e.message)
         } finally {
             try { s.close() } catch (e: Exception) {}
+        }
+    }
+
+    fun selfTest(): String {
+        return try {
+            val s = Socket()
+            s.connect(InetSocketAddress("127.0.0.1", HostIdentity.HTTP_PORT), 3000)
+            s.soTimeout = 3000
+            s.getOutputStream().write(
+                "GET /serverinfo HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+                    .toByteArray(Charsets.US_ASCII))
+            s.getOutputStream().flush()
+            val text = s.getInputStream().bufferedReader().readText()
+            s.close()
+            text
+        } catch (e: Exception) {
+            "SELF-TEST FALLITO: " + e.message
         }
     }
 }
