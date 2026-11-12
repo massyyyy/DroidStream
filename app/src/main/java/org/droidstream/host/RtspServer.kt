@@ -13,7 +13,6 @@ class RtspServer(private val port: Int = 48010) {
     private var serverSocket: ServerSocket? = null
     private val running = AtomicBoolean(false)
     private var clientSocket: Socket? = null
-    private var clientPort: Int = 0
     
     fun start() {
         if (running.get()) return
@@ -82,7 +81,6 @@ class RtspServer(private val port: Int = 48010) {
                 if (parts.size < 3) continue
                 
                 val method = parts[0]
-                val target = parts[1]
                 val cseq = headers["cseq"]?.toIntOrNull() ?: 0
                 
                 when (method) {
@@ -92,6 +90,7 @@ class RtspServer(private val port: Int = 48010) {
                         writer.print("Public: OPTIONS, DESCRIBE, SETUP, ANNOUNCE, PLAY, TEARDOWN\r\n")
                         writer.print("\r\n")
                         writer.flush()
+                        Log.i(TAG, "Sent OPTIONS response")
                     }
                     "DESCRIBE" -> {
                         val sdp = buildSdp()
@@ -102,19 +101,16 @@ class RtspServer(private val port: Int = 48010) {
                         writer.print("\r\n")
                         writer.print(sdp)
                         writer.flush()
+                        Log.i(TAG, "Sent DESCRIBE response with SDP")
                     }
                     "SETUP" -> {
-                        val transport = headers["transport"] ?: ""
-                        val clientPortMatch = Regex("client_port=(\\d+)-(\\d+)").find(transport)
-                        if (clientPortMatch != null) {
-                            clientPort = clientPortMatch.groupValues[1].toIntOrNull() ?: 0
-                        }
                         writer.print("RTSP/1.0 200 OK\r\n")
                         writer.print("CSeq: $cseq\r\n")
                         writer.print("Session: DEADBEEFCAFE;timeout=90\r\n")
                         writer.print("Transport: RTP/AVP/UDP;unicast;server_port=47998\r\n")
                         writer.print("\r\n")
                         writer.flush()
+                        Log.i(TAG, "Sent SETUP response")
                     }
                     "ANNOUNCE" -> {
                         Log.i(TAG, "ANNOUNCE payload: $payload")
@@ -122,6 +118,7 @@ class RtspServer(private val port: Int = 48010) {
                         writer.print("CSeq: $cseq\r\n")
                         writer.print("\r\n")
                         writer.flush()
+                        Log.i(TAG, "Sent ANNOUNCE response")
                     }
                     "PLAY" -> {
                         writer.print("RTSP/1.0 200 OK\r\n")
@@ -129,14 +126,17 @@ class RtspServer(private val port: Int = 48010) {
                         writer.print("Session: DEADBEEFCAFE;timeout=90\r\n")
                         writer.print("\r\n")
                         writer.flush()
-                        Log.i(TAG, "PLAY received, starting video stream (M3a placeholder)")
+                        Log.i(TAG, "PLAY received - starting video stream")
                     }
                     "TEARDOWN" -> {
                         writer.print("RTSP/1.0 200 OK\r\n")
                         writer.print("CSeq: $cseq\r\n")
                         writer.print("\r\n")
                         writer.flush()
-                        Log.i(TAG, "TEARDOWN received, stopping video stream")
+                        Log.i(TAG, "TEARDOWN received")
+                    }
+                    else -> {
+                        Log.w(TAG, "Unknown RTSP method: $method")
                     }
                 }
             }
