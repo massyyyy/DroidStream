@@ -48,8 +48,8 @@ Java_org_droidstream_host_NativeBridge_enetStart(JNIEnv *env, jclass clazz, jint
     addr.port = (enet_uint16) port;
 
     g_host = enet_host_create(&addr,
-                              1,   /* un solo peer: il client */
-                              8,   /* canali: abbastanza per CTRL_CHANNEL_COUNT */
+                              1,   /* un solo peer: il client Moonlight */
+                              8,   /* canali: sufficienti per CTRL_CHANNEL_COUNT */
                               0, 0);
     if (!g_host) { LOGE("enet_host_create fallito"); return JNI_FALSE; }
 
