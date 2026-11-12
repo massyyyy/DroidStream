@@ -20,6 +20,9 @@ object LaunchHandler {
     var activeSession: LaunchParams? = null
         private set
     
+    var rtspServer: RtspServer? = null
+    var screenCapture: ScreenCapture? = null
+
     fun handleLaunch(ctx: Context, query: Map<String, String>): Pair<Int, String> {
         val appId = query["appid"]?.toIntOrNull() ?: return errorXml(400, "Missing appid")
         val mode = query["mode"] ?: return errorXml(400, "Missing mode")
@@ -40,22 +43,25 @@ object LaunchHandler {
         }
         
         activeSession = LaunchParams(
-            appId = appId,
-            width = width,
-            height = height,
-            fps = fps,
-            rikey = keyBytes,
-            rikeyId = rikeyId
+            appId = appId, width = width, height = height, fps = fps,
+            rikey = keyBytes, rikeyId = rikeyId, bitrate = 5000000
         )
         
-        Log.i(TAG, "Launch: ${width}x${height}@${fps}fps, rikey=${rikey.take(8)}...")
+        Log.i(TAG, "Launch: ${width}x${height}@${fps}fps")
+        
+        if (rtspServer == null) {
+            rtspServer = RtspServer(48010).apply { start() }
+        }
+        
+        if (screenCapture == null) {
+            screenCapture = ScreenCapture(ctx, activeSession!!).apply { start() }
+        }
         
         val xml = """<?xml version="1.0" encoding="utf-8"?>
 <root status_code="200">
   <sessionUrl0>rtsp://192.168.1.218:48010</sessionUrl0>
   <gamesession>1</gamesession>
 </root>"""
-        
         return Pair(200, xml)
     }
     
@@ -73,5 +79,13 @@ object LaunchHandler {
     private fun errorXml(code: Int, msg: String): Pair<Int, String> {
         return Pair(code, """<?xml version="1.0" encoding="utf-8"?>
 <root status_code="$code" status_message="$msg"/>""")
+    }
+    
+    fun stop() {
+        screenCapture?.stop()
+        screenCapture = null
+        rtspServer?.stop()
+        rtspServer = null
+        activeSession = null
     }
 }
