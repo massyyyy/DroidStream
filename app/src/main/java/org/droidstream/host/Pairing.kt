@@ -39,6 +39,7 @@ object Pairing {
     private var pendingPin: Session? = null
     private var cachedCert: X509Certificate? = null
     private var cachedKey: PrivateKey? = null
+    private var ctx0: Context? = null
 
     // ---------- utilita' ----------
     fun hex(b: ByteArray): String {
@@ -73,7 +74,7 @@ object Pairing {
         val ks = KeyStore.getInstance("PKCS12")
         File(ctx.filesDir, "keystore.p12").inputStream().use { ks.load(it, KS_PASS.toCharArray()) }
         cachedCert = ks.getCertificate("droidstream") as X509Certificate
-        cachedKey = ks.getKey("droidstream", KS_PASS.toCharArray())
+        cachedKey = ks.getKey("droidstream", KS_PASS.toCharArray()) as? PrivateKey
     }
 
     // ---------- crypto (verificata: crypto.cpp:325-343, PairingManager.java:95-165) ----------
@@ -102,10 +103,10 @@ object Pairing {
 
     // ---------- client autorizzati ----------
     fun isAuthorized(uid: String): Boolean =
-        ctx0?.let { it.getSharedPreferences("droidstream_host", Context.MODE_PRIVATE)
-            .getStringSet("authorized", emptySet())?.contains(uid) } ?: false
-
-    private var ctx0: Context? = null
+        ctx0?.let {
+            it.getSharedPreferences("droidstream_host", Context.MODE_PRIVATE)
+                .getStringSet("authorized", emptySet())?.contains(uid)
+        } ?: false
 
     private fun addAuthorized(ctx: Context, sess: Session): Boolean {
         return try {
@@ -139,15 +140,12 @@ object Pairing {
         return Pair(status, sb.toString())
     }
 
-    fun applistXml(): Pair<Int, String> =
-        xml(200, null, mapOf(
-            "App" to ""))
-        .let {
-            val body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+    fun applistXml(): Pair<Int, String> {
+        val body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
                 "<root status_code=\"200\"><App><IsHdrSupported>0</IsHdrSupported>" +
                 "<AppTitle>Android Screen</AppTitle><ID>1</ID></App></root>"
-            Pair(200, body)
-        }
+        return Pair(200, body)
+    }
 
     fun serverInfoXml(ctx: Context, localIp: String, https: Boolean, clientUid: String?,
                       builder: (pairStatus: Int) -> String): Pair<Int, String> =
@@ -208,7 +206,7 @@ object Pairing {
         val key = sess.aesKey ?: return xml(400, "Cipher key not set", null)
         loadKeys(ctx)
         val dec = aesEcb(Cipher.DECRYPT_MODE, key, unhex(challengeHex))
-        val sign = cachedCert!!.sigBytes
+        val sign = cachedCert!!.getSigBytes()
         val secret = rand(16)
         val hash = sha256(dec + sign + secret)
         val challenge = rand(16)
@@ -223,7 +221,7 @@ object Pairing {
     private fun serverChallengeResp(ctx: Context, sess: Session, respHex: String): Pair<Int, String> {
         if (sess.phase != PHASE_CLIENT_CHALLENGE) { sessions.remove(sess.uniqueId); return xml(400, "Out of order", null) }
         val key = sess.aesKey ?: return xml(400, "Cipher key not set", null)
-        val secret = sess.serverSecret ?: return xml(400, "serversecret not set", null)
+        val secret = sess.serverSecret ?: return xml(400, "Cipher key or serversecret not set", null)
         sess.clientHash = aesEcb(Cipher.DECRYPT_MODE, key, unhex(respHex))
         val sig = signBytes(secret, ctx)
         sess.phase = PHASE_SERVER_RESP
@@ -240,7 +238,7 @@ object Pairing {
         val paired = try {
             val clientCert = CertificateFactory.getInstance("X.509")
                 .generateCertificate(sess.clientCertPem.byteInputStream()) as X509Certificate
-            val data = (sess.serverChallenge ?: ByteArray(0)) + clientCert.sigBytes + secret
+            val data = (sess.serverChallenge ?: ByteArray(0)) + clientCert.getSigBytes() + secret
             val sameHash = sha256(data).contentEquals(sess.clientHash ?: ByteArray(0))
             val v = Signature.getInstance("SHA256withRSA")
             v.initVerify(clientCert.publicKey)
