@@ -37,15 +37,6 @@ typedef struct {
     uint32_t fecInfo;           /* 0 */
 } __attribute__((packed)) NV_VIDEO_PACKET;
 
-/* 8-byte frame header for first packet of frame (SOF) when appversion >= 7.1.350 */
-typedef struct {
-    uint8_t  headerType;                /* 0x01 */
-    uint16_t frame_processing_latency;  /* 0 */
-    uint8_t  frameType;                 /* 2 = IDR/Keyframe, 1 = P-Frame */
-    uint16_t lastPayloadLen;            /* 0 */
-    uint8_t  unknown[2];                /* 0, 0 */
-} __attribute__((packed)) VIDEO_SHORT_FRAME_HEADER;
-
 static uint16_t g_seq_num = 0;
 static uint32_t g_stream_packet_seq = 0;
 static uint32_t g_ssrc = 0x12345678;
@@ -57,6 +48,10 @@ Java_org_droidstream_host_NativeBridge_resetVideoPacketizer(JNIEnv *env, jclass 
     (void) clazz;
     g_seq_num = 0;
     g_stream_packet_seq = 0;
+    if (g_sock >= 0) {
+        close(g_sock);
+        g_sock = -1;
+    }
 }
 
 static int ensure_socket(void) {
@@ -64,10 +59,29 @@ static int ensure_socket(void) {
         g_sock = socket(AF_INET, SOCK_DGRAM, 0);
         if (g_sock < 0) {
             LOGE("socket() failed: %s", strerror(errno));
-        } else {
-            int sndbuf = 256 * 1024;
-            setsockopt(g_sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+            return -1;
         }
+
+        int opt = 1;
+        setsockopt(g_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+        setsockopt(g_sock, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
+
+        struct sockaddr_in local_addr;
+        memset(&local_addr, 0, sizeof(local_addr));
+        local_addr.sin_family = AF_INET;
+        local_addr.sin_port = htons(47998);
+        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+        if (bind(g_sock, (struct sockaddr *) &local_addr, sizeof(local_addr)) < 0) {
+            LOGE("bind(47998) failed: %s", strerror(errno));
+        } else {
+            LOGI("Video socket bound to local port 47998");
+        }
+
+        int sndbuf = 256 * 1024;
+        setsockopt(g_sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
     }
     return g_sock;
 }
@@ -77,6 +91,7 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
         jbyteArray frame_data, jint frame_index, jboolean is_keyframe, jint rtp_timestamp,
         jstring remote_addr, jint remote_port) {
     (void) clazz;
+    (void) is_keyframe;
 
     jsize frame_len = (*env)->GetArrayLength(env, frame_data);
     if (frame_len <= 0) return 0;
@@ -108,14 +123,11 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
     int offset = 0;
     int packet_count = 0;
 
+    const int header_size = (int)(sizeof(RTP_HEADER) + sizeof(NV_VIDEO_PACKET));
+    const int max_payload = target_packet_size - header_size;
+
     while (offset < frame_len) {
         int is_first = (offset == 0);
-        int header_size = (int)(sizeof(RTP_HEADER) + sizeof(NV_VIDEO_PACKET));
-        if (is_first) {
-            header_size += (int)sizeof(VIDEO_SHORT_FRAME_HEADER);
-        }
-
-        int max_payload = target_packet_size - header_size;
         int remaining = frame_len - offset;
         int payload_size = (remaining < max_payload) ? remaining : max_payload;
         int is_last = (offset + payload_size >= frame_len);
@@ -142,20 +154,8 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
         nv->multiFecBlocks    = 0x00;
         nv->fecInfo           = 0;
 
-        /* 3. Short Frame Header (Presente solo sul primo pacchetto della frame: SOF) */
+        /* 3. Dati del frame video H.264 (Annex-B NAL stream) */
         uint8_t *payload_dst = packet_buf + sizeof(RTP_HEADER) + sizeof(NV_VIDEO_PACKET);
-        if (is_first) {
-            VIDEO_SHORT_FRAME_HEADER *sfh = (VIDEO_SHORT_FRAME_HEADER *) payload_dst;
-            sfh->headerType = 0x01;
-            sfh->frame_processing_latency = 0;
-            sfh->frameType = is_keyframe ? 2 : 1; /* 2 = IDR, 1 = P-Frame */
-            sfh->lastPayloadLen = 0;
-            sfh->unknown[0] = 0;
-            sfh->unknown[1] = 0;
-            payload_dst += sizeof(VIDEO_SHORT_FRAME_HEADER);
-        }
-
-        /* 4. Dati del frame video */
         memcpy(payload_dst, frame_bytes + offset, (size_t) payload_size);
 
         ssize_t sent = sendto(sock, packet_buf, (size_t) packet_len, 0,

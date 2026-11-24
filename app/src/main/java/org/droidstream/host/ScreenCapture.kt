@@ -19,7 +19,6 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     private var virtualDisplay: VirtualDisplay? = null
     private var encoder: MediaCodec? = null
     private var surface: Surface? = null
-    private var videoSocket: DatagramSocket? = null
     private var remoteAddress: InetSocketAddress? = null
     @Volatile private var running = false
     @Volatile private var canSend = false
@@ -38,10 +37,9 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
 
     fun start() {
         Log.i(TAG, "ScreenCapture initialized: ${params.width}x${params.height}@${params.fps}fps")
-        if (videoSocket == null) {
-            videoSocket = DatagramSocket()
+        if (remoteAddress == null) {
             remoteAddress = InetSocketAddress(params.clientIp, HostIdentity.UDP_VIDEO_PORT)
-            Log.i(TAG, "Video socket ready, target: $remoteAddress")
+            Log.i(TAG, "Video target pronto: $remoteAddress")
         }
         if (ProjectionHolder.has()) {
             begin()
@@ -268,8 +266,6 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             encoder?.release()
         } catch (e: Exception) {}
         encoder = null
-        try { videoSocket?.close() } catch (e: Exception) {}
-        videoSocket = null
         Log.i(TAG, "ScreenCapture stopped")
     }
 
