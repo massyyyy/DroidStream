@@ -22,6 +22,8 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     private var videoSocket: DatagramSocket? = null
     private var remoteAddress: InetSocketAddress? = null
     @Volatile private var running = false
+    @Volatile private var canSend = false
+    @Volatile private var firstKeySent = false
     private var encoderThread: Thread? = null
 
     private var streamWidth = params.width
@@ -57,8 +59,21 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     }
 
     fun startSending() {
-        Log.i(TAG, "startSending() richiesto")
+        Log.i(TAG, "startSending() richiesto (RTSP PLAY)")
+        canSend = true
+        requestKeyFrame()
         if (!running) start()
+    }
+
+    fun requestKeyFrame() {
+        try {
+            val bundle = Bundle()
+            bundle.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+            encoder?.setParameters(bundle)
+            Log.i(TAG, "Sync frame (IDR) richiesto all'encoder")
+        } catch (e: Exception) {
+            Log.w(TAG, "Errore richiesta sync frame: ${e.message}")
+        }
     }
 
     fun begin() {
@@ -187,6 +202,25 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                             spsPps = data
                             Log.i(TAG, "Cached SPS/PPS config: ${data.size} bytes")
                         } else {
+                            if (!canSend) {
+                                // Non inviare pacchetti prima che Moonlight abbia inviato RTSP PLAY
+                                encoder?.releaseOutputBuffer(idx, false)
+                                continue
+                            }
+
+                            if (!firstKeySent) {
+                                if (isKey) {
+                                    firstKeySent = true
+                                    Log.i(TAG, "Primo IDR keyframe inviato a Moonlight!")
+                                } else {
+                                    if (frameIndex % 15 == 0) {
+                                        requestKeyFrame()
+                                    }
+                                    encoder?.releaseOutputBuffer(idx, false)
+                                    continue
+                                }
+                            }
+
                             val frameBytes = if (isKey && spsPps != null) {
                                 // Moonlight richiede che ogni IDR inizi con SPS (Annex-B 00 00 00 01 67)
                                 if (data.size > 4 && (data[4].toInt() and 0x1F) == 7) {
@@ -205,7 +239,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                             NativeBridge.sendVideoFrame(
                                 frameBytes, frameIndex, isKey, rtpTimestamp,
                                 targetHost, targetPort)
-                            if (frameIndex % 60 == 0) {
+                            if (frameIndex % 60 == 0 || isKey) {
                                 Log.i(TAG, "Frame inviato: #$frameIndex (size=${frameBytes.size}, key=$isKey) a $targetHost:$targetPort")
                             }
                             frameIndex++
