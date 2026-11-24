@@ -38,6 +38,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
 
     fun start() {
         Log.i(TAG, "ScreenCapture initialized: ${params.width}x${params.height}@${params.fps}fps")
+        NativeBridge.initVideoPacketizer()
         if (remoteAddress == null) {
             remoteAddress = InetSocketAddress(params.clientIp, HostIdentity.UDP_VIDEO_PORT)
             Log.i(TAG, "Video target pronto: $remoteAddress")
@@ -209,8 +210,15 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
 
                             if (!firstKeySent) {
                                 if (isKey) {
+                                    // Wait briefly for Moonlight's UDP ping on port 47998 so we have the real ephemeral port
+                                    var waitAttempts = 0
+                                    while (NativeBridge.getDiscoveredClientPort() == 0 && waitAttempts < 20 && running && canSend) {
+                                        try { Thread.sleep(50) } catch (e: Exception) {}
+                                        waitAttempts++
+                                    }
+                                    val discovered = NativeBridge.getDiscoveredClientPort()
                                     firstKeySent = true
-                                    Log.i(TAG, "Primo IDR keyframe inviato a Moonlight!")
+                                    Log.i(TAG, "Primo IDR keyframe inviato a Moonlight! Discovered port: $discovered (attesi ${waitAttempts * 50}ms)")
                                 } else {
                                     if (frameIndex % 15 == 0) {
                                         requestKeyFrame()
@@ -232,14 +240,15 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                             }
                             
                             val rtpTimestamp = (frameIndex * timestampIncrement).toInt()
+                            val discoveredPort = NativeBridge.getDiscoveredClientPort()
                             val targetHost = remoteAddress?.address?.hostAddress ?: params.clientIp
-                            val targetPort = remoteAddress?.port ?: HostIdentity.UDP_VIDEO_PORT
+                            val targetPort = if (discoveredPort > 0) discoveredPort else (remoteAddress?.port ?: HostIdentity.UDP_VIDEO_PORT)
                             
                             NativeBridge.sendVideoFrame(
                                 frameBytes, frameIndex, isKey, rtpTimestamp,
                                 targetHost, targetPort)
                             if (frameIndex % 60 == 0 || isKey) {
-                                Log.i(TAG, "Frame inviato: #$frameIndex (size=${frameBytes.size}, key=$isKey) a $targetHost:$targetPort")
+                                Log.i(TAG, "Frame inviato: #$frameIndex (size=${frameBytes.size}, key=$isKey) a $targetHost:$targetPort (discovered=$discoveredPort)")
                             }
                             frameIndex++
                         }
@@ -267,6 +276,7 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
             encoder?.release()
         } catch (e: Exception) {}
         encoder = null
+        NativeBridge.resetVideoPacketizer()
         Log.i(TAG, "ScreenCapture stopped")
     }
 

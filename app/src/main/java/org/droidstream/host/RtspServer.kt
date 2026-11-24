@@ -112,6 +112,7 @@ class RtspServer(private val port: Int = 48010) {
                         val clientIp = socket.inetAddress?.hostAddress ?: "127.0.0.1"
                         Log.i(TAG, "Destinazione video RTSP SETUP: $clientIp:$clientPort")
                         LaunchHandler.screenCapture?.updateClientAddress(clientIp, clientPort)
+                        NativeBridge.initVideoPacketizer()
                     }
 
                     val extra = if (type == "control")
