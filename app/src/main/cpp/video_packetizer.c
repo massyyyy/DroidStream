@@ -51,6 +51,14 @@ static uint32_t g_stream_packet_seq = 0;
 static uint32_t g_ssrc = 0x12345678;
 static int g_sock = -1;
 
+JNIEXPORT void JNICALL
+Java_org_droidstream_host_NativeBridge_resetVideoPacketizer(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    g_seq_num = 0;
+    g_stream_packet_seq = 0;
+}
+
 static int ensure_socket(void) {
     if (g_sock < 0) {
         g_sock = socket(AF_INET, SOCK_DGRAM, 0);

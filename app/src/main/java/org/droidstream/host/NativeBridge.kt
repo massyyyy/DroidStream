@@ -5,6 +5,7 @@ object NativeBridge {
     external fun info(): String
     external fun enetStart(port: Int): Boolean
     external fun enetStop()
+    external fun resetVideoPacketizer()
     external fun sendVideoFrame(
         data: ByteArray, 
         frameIndex: Int, 

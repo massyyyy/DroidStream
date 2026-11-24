@@ -27,6 +27,8 @@ object LaunchHandler {
     }
 
     fun handleLaunch(ctx: Context, query: Map<String, String>, clientIp: String? = null): Pair<Int, String> {
+        stop()
+
         val appId = query["appid"]?.toIntOrNull() ?: return errorXml(400, "Missing appid")
         val mode = query["mode"] ?: return errorXml(400, "Missing mode")
         val rikey = query["rikey"] ?: return errorXml(400, "Missing rikey")
@@ -45,8 +47,8 @@ object LaunchHandler {
         Log.i(TAG, "Launch: ${width}x${height}@${fps}fps, client=$resolvedIp")
 
         InputManager.init(ctx)
-        if (rtspServer == null) rtspServer = RtspServer(HostIdentity.RTSP_PORT).apply { start() }
-        if (screenCapture == null) screenCapture = ScreenCapture(ctx, activeSession!!).apply { start() }
+        rtspServer = RtspServer(HostIdentity.RTSP_PORT).apply { start() }
+        screenCapture = ScreenCapture(ctx, activeSession!!).apply { start() }
         if (!enetStarted) {
             enetStarted = NativeBridge.enetStart(CONTROL_ENET_PORT)
             Log.i(TAG, "ENet control server su UDP $CONTROL_ENET_PORT: " + if (enetStarted) "OK" else "FALLITO")

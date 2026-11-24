@@ -16,7 +16,6 @@ import java.net.InetSocketAddress
 
 class ScreenCapture(private val context: Context, private val params: LaunchHandler.LaunchParams) {
 
-    private var mediaProjection: android.media.projection.MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var encoder: MediaCodec? = null
     private var surface: Surface? = null
@@ -24,6 +23,10 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     private var remoteAddress: InetSocketAddress? = null
     @Volatile private var running = false
     private var encoderThread: Thread? = null
+
+    private var streamWidth = params.width
+    private var streamHeight = params.height
+    private var streamFps = params.fps
 
     fun updateClientAddress(ip: String) {
         if (ip.isEmpty() || ip == "127.0.0.1") return
@@ -60,46 +63,61 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
 
     fun begin() {
         if (running) return
-        val data = ProjectionHolder.data ?: return
         val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mpm.getMediaProjection(ProjectionHolder.resultCode, data)
-        if (mediaProjection == null) {
+        if (ProjectionHolder.mediaProjection == null) {
+            val data = ProjectionHolder.data ?: return
+            ProjectionHolder.mediaProjection = mpm.getMediaProjection(ProjectionHolder.resultCode, data)
+        }
+        val mp = ProjectionHolder.mediaProjection
+        if (mp == null) {
             Log.e(TAG, "MediaProjection null")
             return
         }
+        NativeBridge.resetVideoPacketizer()
         setupEncoder()
-        startVirtualDisplay()
+        startVirtualDisplay(mp)
         startEncoding()
         running = true
         Log.i(TAG, "Cattura schermo avviata")
     }
 
     private fun setupEncoder() {
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, params.width, params.height).apply {
+        // Su chip Snapdragon entry-level (max 244.800 blocchi/sec), 1080p60 supera il limite hardware.
+        // Se la risoluzione richiesta supera 720p, limitiamo il framerate a 30fps per evitare blocchi dell'encoder.
+        if (streamWidth > 1280 || streamHeight > 720) {
+            if (streamFps > 30) streamFps = 30
+        }
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, streamWidth, streamHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, params.bitrate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, params.fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2) // Keyframe ogni 2 secondi
+            setInteger(MediaFormat.KEY_FRAME_RATE, streamFps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // Keyframe ogni 1 secondo
             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel32)
+            try {
+                setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, (1_000_000L / streamFps))
+            } catch (e: Exception) {
+                try {
+                    setLong("repeat-previous-frame-after", (1_000_000L / streamFps))
+                } catch (e2: Exception) {}
+            }
         }
         encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         surface = encoder?.createInputSurface()
         encoder?.start()
         
-        // FORZA un keyframe immediato per garantire che Moonlight abbia un punto di decodifica valido all'avvio
+        // Richiedi keyframe immediato
         val bundle = Bundle()
         bundle.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
         encoder?.setParameters(bundle)
         
-        Log.i(TAG, "Encoder configurato ${params.width}x${params.height}@${params.fps}")
+        Log.i(TAG, "Encoder configurato ${streamWidth}x${streamHeight}@${streamFps}fps")
     }
 
-    private fun startVirtualDisplay() {
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
+    private fun startVirtualDisplay(mp: android.media.projection.MediaProjection) {
+        virtualDisplay = mp.createVirtualDisplay(
             "DroidStream",
-            params.width, params.height, 320,
+            streamWidth, streamHeight, 320,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             surface, null, null)
     }
@@ -108,17 +126,15 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
         val thread = Thread({
             val info = MediaCodec.BufferInfo()
             var frameIndex = 0
-            // Timestamp RTP: 90000 tick al secondo. Per 60fps, 1 frame = 1500 tick.
-            val timestampIncrement = 90000L / params.fps 
+            val timestampIncrement = 90000L / streamFps 
+            var spsPps: ByteArray? = null
             
             while (running) {
                 val idx = encoder?.dequeueOutputBuffer(info, 10000) ?: -1
                 if (idx == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    // Nessun frame pronto, continua ad aspettare
+                    // Continua ad attendere
                 } else if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    Log.i(TAG, "Encoder: formato output cambiato")
-                } else if (idx == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                    Log.i(TAG, "Encoder: buffer output cambiati")
+                    Log.i(TAG, "Encoder: formato output cambiato: " + encoder?.outputFormat)
                 } else if (idx >= 0) {
                     val buf = encoder?.getOutputBuffer(idx)
                     if (buf != null && info.size > 0) {
@@ -127,17 +143,36 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                         buf.limit(info.offset + info.size)
                         buf.get(data)
                         
-                        val key = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ||
-                                  (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                        val isConfig = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                        val isKey = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                         
-                        val rtpTimestamp = (frameIndex * timestampIncrement).toInt()
-                        
-                        val targetHost = remoteAddress?.address?.hostAddress ?: params.clientIp
-                        val targetPort = remoteAddress?.port ?: HostIdentity.UDP_VIDEO_PORT
-                        NativeBridge.sendVideoFrame(
-                            data, frameIndex, key, rtpTimestamp,
-                            targetHost, targetPort)
-                        frameIndex++
+                        if (isConfig) {
+                            spsPps = data
+                            Log.i(TAG, "Cached SPS/PPS config: ${data.size} bytes")
+                        } else {
+                            val frameBytes = if (isKey && spsPps != null) {
+                                // Moonlight richiede che ogni IDR inizi con SPS (Annex-B 00 00 00 01 67)
+                                if (data.size > 4 && (data[4].toInt() and 0x1F) == 7) {
+                                    data
+                                } else {
+                                    spsPps!! + data
+                                }
+                            } else {
+                                data
+                            }
+                            
+                            val rtpTimestamp = (frameIndex * timestampIncrement).toInt()
+                            val targetHost = remoteAddress?.address?.hostAddress ?: params.clientIp
+                            val targetPort = remoteAddress?.port ?: HostIdentity.UDP_VIDEO_PORT
+                            
+                            NativeBridge.sendVideoFrame(
+                                frameBytes, frameIndex, isKey, rtpTimestamp,
+                                targetHost, targetPort)
+                            if (frameIndex % 60 == 0) {
+                                Log.i(TAG, "Frame inviato: #$frameIndex (size=${frameBytes.size}, key=$isKey) a $targetHost:$targetPort")
+                            }
+                            frameIndex++
+                        }
                     }
                     encoder?.releaseOutputBuffer(idx, false)
                 }
@@ -152,18 +187,18 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     fun stop() {
         running = false
         if (pending === this) pending = null
-        encoderThread?.join(500)
-        virtualDisplay?.release()
-        surface?.release()
+        try { encoderThread?.join(500) } catch (e: Exception) {}
+        try { virtualDisplay?.release() } catch (e: Exception) {}
+        virtualDisplay = null
+        try { surface?.release() } catch (e: Exception) {}
+        surface = null
         try {
             encoder?.stop()
             encoder?.release()
-        } catch (e: Exception) {
-        }
-        videoSocket?.close()
+        } catch (e: Exception) {}
+        encoder = null
+        try { videoSocket?.close() } catch (e: Exception) {}
         videoSocket = null
-        mediaProjection?.stop()
-        mediaProjection = null
         Log.i(TAG, "ScreenCapture stopped")
     }
 
