@@ -13,4 +13,9 @@ object NativeBridge {
         remoteAddr: String, 
         remotePort: Int
     ): Int
+
+    @JvmStatic
+    fun onNativeInput(type: Int, x: Int, y: Int, button: Int, keyCode: Int) {
+        InputManager.onInput(type, x, y, button, keyCode)
+    }
 }

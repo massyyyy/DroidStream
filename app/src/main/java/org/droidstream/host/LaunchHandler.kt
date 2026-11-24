@@ -9,7 +9,8 @@ object LaunchHandler {
 
     data class LaunchParams(
         val appId: Int, val width: Int, val height: Int, val fps: Int,
-        val rikey: ByteArray, val rikeyId: Int, val bitrate: Int = 5000000
+        val rikey: ByteArray, val rikeyId: Int, val bitrate: Int = 5000000,
+        var clientIp: String = "127.0.0.1"
     )
 
     @Volatile var activeSession: LaunchParams? = null
@@ -19,7 +20,13 @@ object LaunchHandler {
     var screenCapture: ScreenCapture? = null
     private var enetStarted = false
 
-    fun handleLaunch(ctx: Context, query: Map<String, String>): Pair<Int, String> {
+    fun updateClientIp(ip: String) {
+        if (ip.isEmpty() || ip == "127.0.0.1") return
+        activeSession?.clientIp = ip
+        screenCapture?.updateClientAddress(ip)
+    }
+
+    fun handleLaunch(ctx: Context, query: Map<String, String>, clientIp: String? = null): Pair<Int, String> {
         val appId = query["appid"]?.toIntOrNull() ?: return errorXml(400, "Missing appid")
         val mode = query["mode"] ?: return errorXml(400, "Missing mode")
         val rikey = query["rikey"] ?: return errorXml(400, "Missing rikey")
@@ -33,10 +40,12 @@ object LaunchHandler {
 
         val keyBytes = try { hexToBytes(rikey) } catch (e: Exception) { return errorXml(400, "Invalid rikey hex") }
 
-        activeSession = LaunchParams(appId, width, height, fps, keyBytes, rikeyId)
-        Log.i(TAG, "Launch: ${width}x${height}@${fps}fps")
+        val resolvedIp = clientIp ?: "127.0.0.1"
+        activeSession = LaunchParams(appId, width, height, fps, keyBytes, rikeyId, clientIp = resolvedIp)
+        Log.i(TAG, "Launch: ${width}x${height}@${fps}fps, client=$resolvedIp")
 
-        if (rtspServer == null) rtspServer = RtspServer(48010).apply { start() }
+        InputManager.init(ctx)
+        if (rtspServer == null) rtspServer = RtspServer(HostIdentity.RTSP_PORT).apply { start() }
         if (screenCapture == null) screenCapture = ScreenCapture(ctx, activeSession!!).apply { start() }
         if (!enetStarted) {
             enetStarted = NativeBridge.enetStart(CONTROL_ENET_PORT)
@@ -46,7 +55,7 @@ object LaunchHandler {
         val ip = ServerInfoXml.lanIpv4()
         val xml = """<?xml version="1.0" encoding="utf-8"?>
 <root status_code="200">
-  <sessionUrl0>rtsp://$ip:48010</sessionUrl0>
+  <sessionUrl0>rtsp://$ip:${HostIdentity.RTSP_PORT}</sessionUrl0>
   <gamesession>1</gamesession>
 </root>"""
         Log.i(TAG, "Sending launch response: $xml")
@@ -71,6 +80,7 @@ object LaunchHandler {
         screenCapture?.stop(); screenCapture = null
         rtspServer?.stop(); rtspServer = null
         if (enetStarted) { NativeBridge.enetStop(); enetStarted = false }
+        InputManager.stop()
         activeSession = null
     }
 }

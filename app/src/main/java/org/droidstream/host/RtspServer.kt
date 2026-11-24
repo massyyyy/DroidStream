@@ -40,7 +40,11 @@ class RtspServer(private val port: Int = 48010) {
     private fun handleClient(socket: Socket) {
         try {
             socket.soTimeout = 10000
-            Log.i(TAG, "RTSP connection from ${socket.inetAddress}")
+            val clientIp = socket.inetAddress?.hostAddress ?: ""
+            Log.i(TAG, "RTSP connection from $clientIp")
+            if (clientIp.isNotEmpty()) {
+                LaunchHandler.updateClientIp(clientIp)
+            }
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             val writer = PrintWriter(socket.getOutputStream(), true)
 

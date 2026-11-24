@@ -25,11 +25,17 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     @Volatile private var running = false
     private var encoderThread: Thread? = null
 
+    fun updateClientAddress(ip: String) {
+        if (ip.isEmpty() || ip == "127.0.0.1") return
+        remoteAddress = InetSocketAddress(ip, HostIdentity.UDP_VIDEO_PORT)
+        Log.i(TAG, "Aggiornato indirizzo client video: $remoteAddress")
+    }
+
     fun start() {
         Log.i(TAG, "ScreenCapture initialized: ${params.width}x${params.height}@${params.fps}fps")
         if (videoSocket == null) {
             videoSocket = DatagramSocket()
-            remoteAddress = InetSocketAddress("192.168.1.239", 47998)
+            remoteAddress = InetSocketAddress(params.clientIp, HostIdentity.UDP_VIDEO_PORT)
             Log.i(TAG, "Video socket ready, target: $remoteAddress")
         }
         if (ProjectionHolder.has()) {
@@ -126,10 +132,11 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
                         
                         val rtpTimestamp = (frameIndex * timestampIncrement).toInt()
                         
+                        val targetHost = remoteAddress?.address?.hostAddress ?: params.clientIp
+                        val targetPort = remoteAddress?.port ?: HostIdentity.UDP_VIDEO_PORT
                         NativeBridge.sendVideoFrame(
                             data, frameIndex, key, rtpTimestamp,
-                            remoteAddress?.address?.hostAddress ?: "192.168.1.239",
-                            remoteAddress?.port ?: 47998)
+                            targetHost, targetPort)
                         frameIndex++
                     }
                     encoder?.releaseOutputBuffer(idx, false)

@@ -53,14 +53,14 @@ class HostService : Service() {
 
         if (wakeLock == null) {
             val pm = getSystemService(PowerManager::class.java)
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DroidStream::host")
+            wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DroidStream::host")
             wakeLock?.acquire()
         }
         if (wifiLock == null) {
             val wm = applicationContext.getSystemService(WifiManager::class.java)
             val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
                        else WifiManager.WIFI_MODE_FULL_HIGH_PERF
-            wifiLock = wm.createWifiLock(mode, "DroidStream::wifi")
+            wifiLock = wm?.createWifiLock(mode, "DroidStream::wifi")
             wifiLock?.acquire()
         }
 
