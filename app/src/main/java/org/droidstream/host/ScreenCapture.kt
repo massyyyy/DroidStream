@@ -82,36 +82,61 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     }
 
     private fun setupEncoder() {
-        // Su chip Snapdragon entry-level (max 244.800 blocchi/sec), 1080p60 supera il limite hardware.
-        // Se la risoluzione richiesta supera 720p, limitiamo il framerate a 30fps per evitare blocchi dell'encoder.
-        if (streamWidth > 1280 || streamHeight > 720) {
-            if (streamFps > 30) streamFps = 30
+        // Il display fisico è 720x1280. Snapdragon 425 non ha risorse hardware per codificare a 1080p (Error 0x80001001).
+        // Scaliamo a massimo 1280x720 mantenendo proporzioni e allineando a multipli di 16.
+        if (streamWidth > 1280) {
+            streamHeight = (streamHeight * 1280) / streamWidth
+            streamWidth = 1280
         }
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, streamWidth, streamHeight).apply {
+        if (streamHeight > 720) {
+            streamWidth = (streamWidth * 720) / streamHeight
+            streamHeight = 720
+        }
+        streamWidth = (streamWidth / 16) * 16
+        streamHeight = (streamHeight / 16) * 16
+        if (streamWidth < 320) streamWidth = 320
+        if (streamHeight < 240) streamHeight = 240
+
+        try {
+            initEncoder(streamWidth, streamHeight, streamFps)
+        } catch (e: Exception) {
+            Log.w(TAG, "Encoder fallito a ${streamWidth}x${streamHeight}@$streamFps: ${e.message}, fallback a 1280x720@30")
+            streamWidth = 1280
+            streamHeight = 720
+            streamFps = 30
+            initEncoder(1280, 720, 30)
+        }
+    }
+
+    private fun initEncoder(w: Int, h: Int, fps: Int) {
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, params.bitrate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, streamFps)
+            setInteger(MediaFormat.KEY_BIT_RATE, params.bitrate.coerceAtMost(8000000))
+            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // Keyframe ogni 1 secondo
             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
             try {
-                setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, (1_000_000L / streamFps))
+                setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, (1_000_000L / fps))
             } catch (e: Exception) {
                 try {
-                    setLong("repeat-previous-frame-after", (1_000_000L / streamFps))
+                    setLong("repeat-previous-frame-after", (1_000_000L / fps))
                 } catch (e2: Exception) {}
             }
         }
-        encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        surface = encoder?.createInputSurface()
-        encoder?.start()
+        val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        surface = enc.createInputSurface()
+        enc.start()
         
         // Richiedi keyframe immediato
-        val bundle = Bundle()
-        bundle.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
-        encoder?.setParameters(bundle)
-        
-        Log.i(TAG, "Encoder configurato ${streamWidth}x${streamHeight}@${streamFps}fps")
+        try {
+            val bundle = Bundle()
+            bundle.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+            enc.setParameters(bundle)
+        } catch (e: Exception) {}
+
+        encoder = enc
+        Log.i(TAG, "Encoder configurato con successo: ${w}x${h}@${fps}fps")
     }
 
     private fun startVirtualDisplay(mp: android.media.projection.MediaProjection) {

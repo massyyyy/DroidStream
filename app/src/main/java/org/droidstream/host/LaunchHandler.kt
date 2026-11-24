@@ -46,12 +46,17 @@ object LaunchHandler {
         activeSession = LaunchParams(appId, width, height, fps, keyBytes, rikeyId, clientIp = resolvedIp)
         Log.i(TAG, "Launch: ${width}x${height}@${fps}fps, client=$resolvedIp")
 
-        InputManager.init(ctx)
-        rtspServer = RtspServer(HostIdentity.RTSP_PORT).apply { start() }
-        screenCapture = ScreenCapture(ctx, activeSession!!).apply { start() }
-        if (!enetStarted) {
-            enetStarted = NativeBridge.enetStart(CONTROL_ENET_PORT)
-            Log.i(TAG, "ENet control server su UDP $CONTROL_ENET_PORT: " + if (enetStarted) "OK" else "FALLITO")
+        try {
+            InputManager.init(ctx)
+            rtspServer = RtspServer(HostIdentity.RTSP_PORT).apply { start() }
+            screenCapture = ScreenCapture(ctx, activeSession!!).apply { start() }
+            if (!enetStarted) {
+                enetStarted = NativeBridge.enetStart(CONTROL_ENET_PORT)
+                Log.i(TAG, "ENet control server su UDP $CONTROL_ENET_PORT: " + if (enetStarted) "OK" else "FALLITO")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Errore avvio sessione streaming: ${e.message}", e)
+            return errorXml(500, "Failed to start streaming session: ${e.message}")
         }
 
         val ip = ServerInfoXml.lanIpv4()
