@@ -102,6 +102,12 @@ object Pairing {
     }
 
     // ---------- client autorizzati ----------
+    fun isAuthorized(ctx: Context, uid: String): Boolean {
+        ctx0 = ctx.applicationContext
+        return ctx.getSharedPreferences("droidstream_host", Context.MODE_PRIVATE)
+            .getStringSet("authorized", emptySet())?.contains(uid) ?: false
+    }
+
     fun isAuthorized(uid: String): Boolean =
         ctx0?.let {
             it.getSharedPreferences("droidstream_host", Context.MODE_PRIVATE)
@@ -129,6 +135,17 @@ object Pairing {
         s.pinLatch.countDown()
     }
 
+    fun handleUnpair(ctx: Context, q: Map<String, String>): Pair<Int, String> {
+        val uid = q["uniqueid"]
+        if (uid != null) {
+            val p = ctx.getSharedPreferences("droidstream_host", Context.MODE_PRIVATE)
+            val set = HashSet(p.getStringSet("authorized", emptySet()))
+            set.remove(uid)
+            p.edit().putStringSet("authorized", set).remove("cert_$uid").apply()
+        }
+        return xml(200, null, mapOf("paired" to "0"))
+    }
+
     // ---------- XML ----------
     private fun xml(status: Int, msg: String?, fields: Map<String, String>?): Pair<Int, String> {
         val sb = StringBuilder("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"")
@@ -149,7 +166,7 @@ object Pairing {
 
     fun serverInfoXml(ctx: Context, localIp: String, https: Boolean, clientUid: String?,
                       builder: (pairStatus: Int) -> String): Pair<Int, String> =
-        Pair(200, builder(if (https && clientUid != null && isAuthorized(clientUid)) 1 else 0))
+        Pair(200, builder(if (https && clientUid != null && isAuthorized(ctx, clientUid)) 1 else 0))
 
     // ---------- dispatcher (nvhttp.cpp:1082-1146) ----------
     fun handlePair(ctx: Context, q: Map<String, String>, https: Boolean): Pair<Int, String> {

@@ -62,6 +62,7 @@ class GameStreamHttpsServer(private val ctx: Context) {
                     ServerInfoXml.build(ctx, localIp, ps)
                 }
                 "/pair" -> Pairing.handlePair(ctx, query, true)
+                "/unpair" -> Pairing.handleUnpair(ctx, query)
                 "/applist" -> Pairing.applistXml()
                 "/launch" -> LaunchHandler.handleLaunch(ctx, query, s.inetAddress.hostAddress)
                 else -> Pair(404, ServerInfoXml.NOT_FOUND)
