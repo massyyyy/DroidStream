@@ -57,6 +57,19 @@ object Pairing {
         return out
     }
 
+    private fun certToPem(cert: X509Certificate): String {
+        val b64 = android.util.Base64.encodeToString(cert.encoded, android.util.Base64.NO_WRAP)
+        val sb = StringBuilder("-----BEGIN CERTIFICATE-----\n")
+        var i = 0
+        while (i < b64.length) {
+            val end = (i + 64).coerceAtMost(b64.length)
+            sb.append(b64.substring(i, end)).append("\n")
+            i = end
+        }
+        sb.append("-----END CERTIFICATE-----\n")
+        return sb.toString()
+    }
+
     fun parseQuery(q: String): Map<String, String> {
         val out = HashMap<String, String>()
         if (q.isEmpty()) return out
@@ -214,7 +227,8 @@ object Pairing {
         loadKeys(ctx)
         sess.aesKey = aesKey(unhex(saltHex).copyOf(16), sess.pin!!)
         sess.phase = PHASE_CERT
-        return xml(200, null, mapOf("paired" to "1", "plaincert" to hex(cachedCert!!.encoded)))
+        val pemStr = certToPem(cachedCert!!)
+        return xml(200, null, mapOf("paired" to "1", "plaincert" to hex(pemStr.toByteArray(Charsets.US_ASCII))))
     }
 
     // fase 2 (nvhttp.cpp:783-824)
