@@ -102,13 +102,25 @@ class RtspServer(private val port: Int = 48010) {
                         "control" -> 47999
                         else -> 47998
                     }
+
+                    val transportHeader = headers["transport"] ?: ""
+                    Log.i(TAG, "SETUP $type transport: $transportHeader")
+                    val portMatch = Regex("""(?:client_port|X-GS-ClientPort)=(\d+)""", RegexOption.IGNORE_CASE).find(transportHeader)
+                    val clientPort = portMatch?.groupValues?.get(1)?.toIntOrNull() ?: serverPort
+
+                    if (type == "video") {
+                        val clientIp = socket.inetAddress?.hostAddress ?: "127.0.0.1"
+                        Log.i(TAG, "Destinazione video RTSP SETUP: $clientIp:$clientPort")
+                        LaunchHandler.screenCapture?.updateClientAddress(clientIp, clientPort)
+                    }
+
                     val extra = if (type == "control")
                         "X-SS-Connect-Data: 1234567890\r\n"
                     else
                         "X-SS-Ping-Payload: 0000000000000000\r\n"
                     respond(writer, cseq,
                         "Session: DEADBEEFCAFE;timeout = 90\r\n" +
-                        "Transport: server_port=$serverPort\r\n$extra")
+                        "Transport: unicast;client_port=$clientPort;server_port=$serverPort\r\n$extra")
                 }
                 "ANNOUNCE" -> {
                     Log.i(TAG, "ANNOUNCE payload:\n$payload")
@@ -141,15 +153,20 @@ class RtspServer(private val port: Int = 48010) {
         return "v=0\r\n" +
             "o=- 0 0 IN IP4 0.0.0.0\r\n" +
             "s=Moonlight\r\n" +
-            "c=IN IP4 0.0.0.0\r\n" +
             "t=0 0\r\n" +
             "a=x-ss-general.featureFlags:135\r\n" +
-            "a=x-ss-general.encryptionSupported:1\r\n" +
+            "a=x-ss-general.encryptionSupported:0\r\n" +
             "a=x-ss-general.encryptionRequested:0\r\n" +
-            "a=x-nv-video[0].refPicInvalidation:1\r\n" +
-            "sprop-parameter-sets=AAAAAU\r\n" +
+            "m=video 47998 RTP/AVP 97\r\n" +
+            "c=IN IP4 0.0.0.0\r\n" +
             "a=rtpmap:97 H264/90000\r\n" +
-            "a=fmtp:97 packetization-mode=1; profile-level-id=42001f\r\n" +
-            "a=fmtp:97 surround-params=211012\r\n"
+            "a=fmtp:97 packetization-mode=1;profile-level-id=42001f;sprop-parameter-sets=AAAAAU\r\n" +
+            "a=control:streamid=video/0/0\r\n" +
+            "a=x-nv-video[0].refPicInvalidation:1\r\n" +
+            "m=audio 48000 RTP/AVP 96\r\n" +
+            "c=IN IP4 0.0.0.0\r\n" +
+            "a=rtpmap:96 opus/48000/2\r\n" +
+            "a=fmtp:96 surround-params=211012\r\n" +
+            "a=control:streamid=audio/0/0\r\n"
     }
 }

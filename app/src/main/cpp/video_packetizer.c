@@ -150,7 +150,7 @@ Java_org_droidstream_host_NativeBridge_sendVideoFrame(JNIEnv *env, jclass clazz,
         if (is_first) nv->flags |= FLAG_SOF;
         if (is_last)  nv->flags |= FLAG_EOF;
         nv->extraFlags        = 0;
-        nv->multiFecFlags     = 0x10;
+        nv->multiFecFlags     = 0x00;
         nv->multiFecBlocks    = 0x00;
         nv->fecInfo           = 0;
 

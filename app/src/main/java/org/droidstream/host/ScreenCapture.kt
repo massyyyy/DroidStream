@@ -29,9 +29,10 @@ class ScreenCapture(private val context: Context, private val params: LaunchHand
     private var streamHeight = params.height
     private var streamFps = params.fps
 
-    fun updateClientAddress(ip: String) {
+    fun updateClientAddress(ip: String, port: Int = HostIdentity.UDP_VIDEO_PORT) {
         if (ip.isEmpty() || ip == "127.0.0.1") return
-        remoteAddress = InetSocketAddress(ip, HostIdentity.UDP_VIDEO_PORT)
+        val targetPort = if (port > 0) port else HostIdentity.UDP_VIDEO_PORT
+        remoteAddress = InetSocketAddress(ip, targetPort)
         Log.i(TAG, "Aggiornato indirizzo client video: $remoteAddress")
     }
 
